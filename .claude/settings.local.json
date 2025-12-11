@@ -8,7 +8,10 @@
       "Bash(adb -s 27261JEGR07342 shell:*)",
       "Bash(adb:*)",
       "Bash(./gradlew :danr:tasks:*)",
-      "Bash(./gradlew:*)"
+      "Bash(./gradlew:*)",
+      "Bash(ls:*)",
+      "Bash(curl -v http://10.0.21.14:8765/api/stress/status)",
+      "Bash(docker ps:*)"
     ],
     "deny": [],
     "ask": []

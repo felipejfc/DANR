@@ -11,6 +11,7 @@ export interface Device {
     originalMaxFreq: number;
     availableFreqs: number[];
   };
+  ipAddress?: string;
   connectedAt: string;
   lastSeen: string;
 }

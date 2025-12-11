@@ -39,6 +39,14 @@ export function setupDeviceSocket(httpServer: HTTPServer): SocketServer {
     }) => {
       console.log('Device registering:', deviceInfo);
 
+      // Extract IP from socket (requires network_mode: host in Docker)
+      let ipAddress = socket.handshake.address;
+      // Handle IPv6 mapped IPv4 addresses (::ffff:192.168.1.1)
+      if (ipAddress && ipAddress.startsWith('::ffff:')) {
+        ipAddress = ipAddress.substring(7);
+      }
+      console.log('Device IP address:', ipAddress);
+
       // Map deviceId to id for the registry
       deviceRegistry.register(socket, {
         id: deviceInfo.deviceId,
@@ -46,6 +54,7 @@ export function setupDeviceSocket(httpServer: HTTPServer): SocketServer {
         androidVersion: deviceInfo.androidVersion,
         hasRoot: deviceInfo.hasRoot,
         cpuInfo: deviceInfo.cpuInfo,
+        ipAddress: ipAddress,
       });
 
       // Send registration confirmation
@@ -165,6 +174,7 @@ function serializeDevice(device: Device) {
     androidVersion: device.androidVersion,
     hasRoot: device.hasRoot,
     cpuInfo: device.cpuInfo,
+    ipAddress: device.ipAddress,
     connectedAt: device.connectedAt,
     lastSeen: device.lastSeen,
     connected: true,

@@ -17,8 +17,26 @@ set_target_properties(danr-zygisk PROPERTIES
     LINK_FLAGS "-s"
 )
 
-# Web server executable
-add_executable(danr-webserver webserver.cpp)
+# Stress testing source files
+set(STRESS_SOURCES
+    stress/stressor_base.cpp
+    stress/cpu_stressor.cpp
+    stress/memory_stressor.cpp
+    stress/disk_stressor.cpp
+    stress/network_stressor.cpp
+    stress/thermal_stressor.cpp
+    stress/stress_manager.cpp
+)
+
+# Web server executable with stress testing support
+add_executable(danr-webserver
+    webserver.cpp
+    ${STRESS_SOURCES}
+)
+
+target_include_directories(danr-webserver PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 target_link_libraries(danr-webserver
     log

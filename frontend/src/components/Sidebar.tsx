@@ -10,7 +10,9 @@ import {
   AlertCircle,
   Menu,
   X,
-  Smartphone
+  Smartphone,
+  Zap,
+  Settings
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from './ui/button'
@@ -20,6 +22,8 @@ const navigation = [
   { name: 'ANR Groups', href: '/groups', icon: Layers },
   { name: 'Analytics', href: '/analytics', icon: TrendingUp },
   { name: 'Devices', href: '/devices', icon: Smartphone },
+  { name: 'Stress Testing', href: '/stress', icon: Zap },
+  { name: 'Module Config', href: '/config', icon: Settings },
 ]
 
 export function Sidebar() {

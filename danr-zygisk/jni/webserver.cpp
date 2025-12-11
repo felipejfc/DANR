@@ -16,6 +16,8 @@
 #include <dirent.h>
 #include <android/log.h>
 
+#include "stress/stress_manager.h"
+
 #define PORT 8765
 #define BUFFER_SIZE 8192
 #define CONFIG_PATH "/data/adb/modules/danr-zygisk/config.json"
@@ -264,6 +266,190 @@ void handle_get_logs(int client_socket) {
     send_response(client_socket, 200, "OK", "text/plain; charset=utf-8", logs);
 }
 
+// ============================================================================
+// JSON Parsing Helpers for Stress API
+// ============================================================================
+
+int parse_json_int(const std::string& json, const std::string& key, int defaultVal) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return defaultVal;
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return defaultVal;
+
+    size_t valueStart = colonPos + 1;
+    while (valueStart < json.size() && isspace(json[valueStart])) valueStart++;
+
+    return atoi(json.c_str() + valueStart);
+}
+
+long parse_json_long(const std::string& json, const std::string& key, long defaultVal) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return defaultVal;
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return defaultVal;
+
+    size_t valueStart = colonPos + 1;
+    while (valueStart < json.size() && isspace(json[valueStart])) valueStart++;
+
+    return atol(json.c_str() + valueStart);
+}
+
+bool parse_json_bool(const std::string& json, const std::string& key, bool defaultVal) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return defaultVal;
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return defaultVal;
+
+    size_t valueStart = colonPos + 1;
+    while (valueStart < json.size() && isspace(json[valueStart])) valueStart++;
+
+    return (json.substr(valueStart, 4) == "true");
+}
+
+std::string parse_json_string(const std::string& json, const std::string& key, const std::string& defaultVal) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return defaultVal;
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return defaultVal;
+
+    size_t startQuote = json.find('"', colonPos);
+    if (startQuote == std::string::npos) return defaultVal;
+
+    size_t endQuote = json.find('"', startQuote + 1);
+    if (endQuote == std::string::npos) return defaultVal;
+
+    return json.substr(startQuote + 1, endQuote - startQuote - 1);
+}
+
+// ============================================================================
+// Stress API Handlers
+// ============================================================================
+
+void handle_stress_status(int client_socket) {
+    std::string json = danr::StressManager::getInstance().getAllStatusJson();
+    send_json(client_socket, "{\"success\":true,\"data\":" + json + "}");
+}
+
+void handle_stress_cpu_start(int client_socket, const std::string& body) {
+    danr::CPUStressConfig config;
+    config.threadCount = parse_json_int(body, "threadCount", 4);
+    config.loadPercentage = parse_json_int(body, "loadPercentage", 100);
+    config.durationMs = parse_json_long(body, "durationMs", 300000);
+    config.pinToCores = parse_json_bool(body, "pinToCores", false);
+
+    if (danr::StressManager::getInstance().startCpuStress(config)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"CPU stress test started\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to start CPU stress test (may already be running)\"}");
+    }
+}
+
+void handle_stress_cpu_stop(int client_socket) {
+    danr::StressManager::getInstance().stopCpuStress();
+    send_json(client_socket, "{\"success\":true,\"message\":\"CPU stress test stopped\"}");
+}
+
+void handle_stress_memory_start(int client_socket, const std::string& body) {
+    danr::MemoryStressConfig config;
+    config.targetFreeMB = parse_json_int(body, "targetFreeMB", 100);
+    config.chunkSizeMB = parse_json_int(body, "chunkSizeMB", 10);
+    config.durationMs = parse_json_long(body, "durationMs", 300000);
+    config.useAnonymousMmap = parse_json_bool(body, "useAnonymousMmap", true);
+    config.lockMemory = parse_json_bool(body, "lockMemory", false);
+
+    if (danr::StressManager::getInstance().startMemoryStress(config)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"Memory stress test started\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to start memory stress test (may already be running)\"}");
+    }
+}
+
+void handle_stress_memory_stop(int client_socket) {
+    danr::StressManager::getInstance().stopMemoryStress();
+    send_json(client_socket, "{\"success\":true,\"message\":\"Memory stress test stopped\"}");
+}
+
+void handle_stress_disk_start(int client_socket, const std::string& body) {
+    danr::DiskStressConfig config;
+    config.throughputMBps = parse_json_int(body, "throughputMBps", 5);
+    config.chunkSizeKB = parse_json_int(body, "chunkSizeKB", 100);
+    config.durationMs = parse_json_long(body, "durationMs", 300000);
+    config.useDirectIO = parse_json_bool(body, "useDirectIO", false);
+    config.syncWrites = parse_json_bool(body, "syncWrites", false);
+
+    std::string testPath = parse_json_string(body, "testPath", "/data/local/tmp/danr_stress");
+    if (!testPath.empty()) {
+        config.testPath = testPath;
+    }
+
+    if (danr::StressManager::getInstance().startDiskStress(config)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"Disk stress test started\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to start disk stress test (may already be running)\"}");
+    }
+}
+
+void handle_stress_disk_stop(int client_socket) {
+    danr::StressManager::getInstance().stopDiskStress();
+    send_json(client_socket, "{\"success\":true,\"message\":\"Disk stress test stopped\"}");
+}
+
+void handle_stress_network_start(int client_socket, const std::string& body) {
+    danr::NetworkStressConfig config;
+    config.bandwidthLimitKbps = parse_json_int(body, "bandwidthLimitKbps", 0);
+    config.latencyMs = parse_json_int(body, "latencyMs", 0);
+    config.packetLossPercent = parse_json_int(body, "packetLossPercent", 0);
+    config.durationMs = parse_json_long(body, "durationMs", 300000);
+
+    std::string iface = parse_json_string(body, "targetInterface", "wlan0");
+    if (!iface.empty()) {
+        config.targetInterface = iface;
+    }
+
+    if (danr::StressManager::getInstance().startNetworkStress(config)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"Network stress test started\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to start network stress test (requires root and tc command)\"}");
+    }
+}
+
+void handle_stress_network_stop(int client_socket) {
+    danr::StressManager::getInstance().stopNetworkStress();
+    send_json(client_socket, "{\"success\":true,\"message\":\"Network stress test stopped\"}");
+}
+
+void handle_stress_thermal_start(int client_socket, const std::string& body) {
+    danr::ThermalStressConfig config;
+    config.disableThermalThrottling = parse_json_bool(body, "disableThermalThrottling", false);
+    config.maxFrequencyPercent = parse_json_int(body, "maxFrequencyPercent", 100);
+    config.forceAllCoresOnline = parse_json_bool(body, "forceAllCoresOnline", true);
+    config.durationMs = parse_json_long(body, "durationMs", 300000);
+
+    if (danr::StressManager::getInstance().startThermalStress(config)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"Thermal stress test started\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to start thermal stress test (may already be running)\"}");
+    }
+}
+
+void handle_stress_thermal_stop(int client_socket) {
+    danr::StressManager::getInstance().stopThermalStress();
+    send_json(client_socket, "{\"success\":true,\"message\":\"Thermal stress test stopped\"}");
+}
+
+void handle_stress_stop_all(int client_socket) {
+    danr::StressManager::getInstance().stopAll();
+    send_json(client_socket, "{\"success\":true,\"message\":\"All stress tests stopped\"}");
+}
+
 void* handle_client(void* arg) {
     int client_socket = *(int*)arg;
     free(arg);
@@ -306,6 +492,8 @@ void* handle_client(void* arg) {
             handle_get_packages(client_socket);
         } else if (strcmp(path, "/api/logs") == 0) {
             handle_get_logs(client_socket);
+        } else if (strcmp(path, "/api/stress/status") == 0) {
+            handle_stress_status(client_socket);
         } else if (strncmp(path, "/style.css", 10) == 0) {
             std::string css = read_file((std::string(WEB_ROOT) + "/style.css").c_str());
             if (!css.empty()) {
@@ -326,12 +514,44 @@ void* handle_client(void* arg) {
     } else if (strcmp(method, "POST") == 0) {
         if (strcmp(path, "/api/config") == 0) {
             handle_save_config(client_socket, body);
+        } else if (strcmp(path, "/api/stress/cpu/start") == 0) {
+            handle_stress_cpu_start(client_socket, body);
+        } else if (strcmp(path, "/api/stress/cpu/stop") == 0) {
+            handle_stress_cpu_stop(client_socket);
+        } else if (strcmp(path, "/api/stress/memory/start") == 0) {
+            handle_stress_memory_start(client_socket, body);
+        } else if (strcmp(path, "/api/stress/memory/stop") == 0) {
+            handle_stress_memory_stop(client_socket);
+        } else if (strcmp(path, "/api/stress/disk/start") == 0) {
+            handle_stress_disk_start(client_socket, body);
+        } else if (strcmp(path, "/api/stress/disk/stop") == 0) {
+            handle_stress_disk_stop(client_socket);
+        } else if (strcmp(path, "/api/stress/network/start") == 0) {
+            handle_stress_network_start(client_socket, body);
+        } else if (strcmp(path, "/api/stress/network/stop") == 0) {
+            handle_stress_network_stop(client_socket);
+        } else if (strcmp(path, "/api/stress/thermal/start") == 0) {
+            handle_stress_thermal_start(client_socket, body);
+        } else if (strcmp(path, "/api/stress/thermal/stop") == 0) {
+            handle_stress_thermal_stop(client_socket);
+        } else if (strcmp(path, "/api/stress/stop-all") == 0) {
+            handle_stress_stop_all(client_socket);
         } else {
             send_404(client_socket);
         }
     } else if (strcmp(method, "OPTIONS") == 0) {
-        // CORS preflight
-        send_response(client_socket, 200, "OK", "text/plain", "");
+        // CORS preflight - need to include all required headers
+        std::stringstream response;
+        response << "HTTP/1.1 200 OK\r\n";
+        response << "Access-Control-Allow-Origin: *\r\n";
+        response << "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+        response << "Access-Control-Allow-Headers: Content-Type, Accept\r\n";
+        response << "Access-Control-Max-Age: 86400\r\n";
+        response << "Content-Length: 0\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+        std::string resp = response.str();
+        send(client_socket, resp.c_str(), resp.length(), 0);
     } else {
         send_response(client_socket, 405, "Method Not Allowed", "text/plain", "Method not allowed");
     }

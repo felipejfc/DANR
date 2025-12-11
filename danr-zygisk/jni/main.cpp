@@ -89,7 +89,6 @@ private:
                 LOGD("WARNING: danrConfig not found in config!");
             }
 
-            LOGD("Loaded config: %zu apps in whitelist", whitelist.size());
             return true;
         } catch (const std::exception& e) {
             LOGE("Failed to parse config: %s", e.what());
@@ -143,8 +142,6 @@ public:
                 LOGE("Failed to load DEX file into memory");
                 shouldInject = false;
             }
-        } else {
-            LOGD("✗ Package '%s' NOT whitelisted - skipping", packageName);
         }
 
         env->ReleaseStringUTFChars(args->nice_name, packageName);
@@ -152,7 +149,6 @@ public:
 
     void postAppSpecialize(const AppSpecializeArgs *args) override {
         if (!shouldInject) {
-            LOGD("postAppSpecialize: shouldInject=false, skipping");
             return;
         }
 

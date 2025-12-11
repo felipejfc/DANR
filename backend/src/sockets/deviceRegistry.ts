@@ -14,6 +14,7 @@ export interface Device {
   androidVersion: string;
   hasRoot: boolean;
   cpuInfo?: CPUInfo;
+  ipAddress?: string;
   connectedAt: Date;
   lastSeen: Date;
 }
