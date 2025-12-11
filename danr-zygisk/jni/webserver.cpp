@@ -1,0 +1,405 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <signal.h>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <map>
+#include <set>
+#include <dirent.h>
+#include <android/log.h>
+
+#define PORT 8765
+#define BUFFER_SIZE 8192
+#define CONFIG_PATH "/data/adb/modules/danr-zygisk/config.json"
+#define WEB_ROOT "/data/adb/modules/danr-zygisk/web"
+
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "DANR-WebServer", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "DANR-WebServer", __VA_ARGS__)
+
+static volatile int keep_running = 1;
+
+void signal_handler(int signum) {
+    LOGD("Received signal %d, shutting down...", signum);
+    keep_running = 0;
+}
+
+std::string read_file(const char* path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+bool write_file(const char* path, const std::string& content) {
+    std::ofstream file(path);
+    if (!file.is_open()) {
+        return false;
+    }
+    file << content;
+    file.close();
+    return true;
+}
+
+std::string escape_json_string(const std::string& str) {
+    std::string result;
+    for (char c : str) {
+        switch (c) {
+            case '"': result += "\\\""; break;
+            case '\\': result += "\\\\"; break;
+            case '\n': result += "\\n"; break;
+            case '\r': result += "\\r"; break;
+            case '\t': result += "\\t"; break;
+            default: result += c; break;
+        }
+    }
+    return result;
+}
+
+
+std::map<std::string, std::string> load_label_cache() {
+    const char* cache_path = "/data/local/tmp/danr-label-cache.json";
+    std::map<std::string, std::string> cache;
+
+    std::ifstream file(cache_path);
+    if (!file.is_open()) {
+        return cache; // Empty cache if file doesn't exist
+    }
+
+    std::string line;
+    std::getline(file, line); // Skip opening brace
+    while (std::getline(file, line)) {
+        if (line.find("}") != std::string::npos) break;
+
+        // Parse "package":"label" format
+        size_t first_quote = line.find('"');
+        if (first_quote == std::string::npos) continue;
+
+        size_t second_quote = line.find('"', first_quote + 1);
+        if (second_quote == std::string::npos) continue;
+
+        size_t third_quote = line.find('"', second_quote + 1);
+        if (third_quote == std::string::npos) continue;
+
+        size_t fourth_quote = line.find('"', third_quote + 1);
+        if (fourth_quote == std::string::npos) continue;
+
+        std::string package = line.substr(first_quote + 1, second_quote - first_quote - 1);
+        std::string label = line.substr(third_quote + 1, fourth_quote - third_quote - 1);
+
+        cache[package] = label;
+    }
+
+    file.close();
+    return cache;
+}
+
+void save_label_cache(const std::map<std::string, std::string>& cache) {
+    const char* cache_path = "/data/local/tmp/danr-label-cache.json";
+    std::ofstream file(cache_path);
+    if (!file.is_open()) {
+        return;
+    }
+
+    file << "{\n";
+    bool first = true;
+    for (const auto& entry : cache) {
+        if (!first) file << ",\n";
+        file << "  \"" << escape_json_string(entry.first) << "\":\"" << escape_json_string(entry.second) << "\"";
+        first = false;
+    }
+    file << "\n}\n";
+
+    file.close();
+}
+
+std::string get_installed_packages() {
+    std::string result = "[";
+
+    // Load existing cache - only use cached labels, don't fetch new ones
+    std::map<std::string, std::string> label_cache = load_label_cache();
+
+    // Get all packages - fast operation
+    FILE* pipe = popen("pm list packages 2>/dev/null | sort", "r");
+    if (pipe) {
+        char buffer[256];
+        bool first = true;
+
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            // Remove "package:" prefix and newline
+            char* pkg = buffer + 8; // Skip "package:"
+            size_t len = strlen(pkg);
+            if (len > 0 && pkg[len-1] == '\n') {
+                pkg[len-1] = '\0';
+            }
+
+            std::string package = pkg;
+            std::string label;
+
+            // Use cached label if available (don't fetch if not cached)
+            if (label_cache.find(package) != label_cache.end()) {
+                label = label_cache[package];
+            }
+
+            if (!first) result += ",";
+            result += "{";
+            result += "\"package\":\"" + escape_json_string(package) + "\"";
+            if (!label.empty()) {
+                result += ",\"label\":\"" + escape_json_string(label) + "\"";
+            }
+            result += "}";
+            first = false;
+        }
+        pclose(pipe);
+    }
+
+    result += "]";
+    return result;
+}
+
+std::string url_decode(const std::string& str) {
+    std::string result;
+    char ch;
+    int i, ii;
+    for (i=0; i<str.length(); i++) {
+        if (str[i] == '%') {
+            sscanf(str.substr(i+1,2).c_str(), "%x", &ii);
+            ch = static_cast<char>(ii);
+            result += ch;
+            i = i+2;
+        } else if (str[i] == '+') {
+            result += ' ';
+        } else {
+            result += str[i];
+        }
+    }
+    return result;
+}
+
+void send_response(int client_socket, int status_code, const char* status_text,
+                   const char* content_type, const std::string& body) {
+    std::stringstream response;
+    response << "HTTP/1.1 " << status_code << " " << status_text << "\r\n";
+    response << "Content-Type: " << content_type << "\r\n";
+    response << "Content-Length: " << body.length() << "\r\n";
+    response << "Access-Control-Allow-Origin: *\r\n";
+    response << "Connection: close\r\n";
+    response << "\r\n";
+    response << body;
+
+    std::string resp = response.str();
+    send(client_socket, resp.c_str(), resp.length(), 0);
+}
+
+void send_json(int client_socket, const std::string& json) {
+    send_response(client_socket, 200, "OK", "application/json", json);
+}
+
+void send_html(int client_socket, const std::string& html) {
+    send_response(client_socket, 200, "OK", "text/html; charset=utf-8", html);
+}
+
+void send_404(int client_socket) {
+    send_response(client_socket, 404, "Not Found", "text/plain", "404 Not Found");
+}
+
+void send_500(int client_socket, const char* error) {
+    send_response(client_socket, 500, "Internal Server Error", "text/plain", error);
+}
+
+void handle_get_config(int client_socket) {
+    std::string config = read_file(CONFIG_PATH);
+    if (config.empty()) {
+        send_500(client_socket, "Failed to read config file");
+        return;
+    }
+    send_json(client_socket, config);
+}
+
+void handle_get_packages(int client_socket) {
+    std::string packages = get_installed_packages();
+    send_json(client_socket, packages);
+}
+
+void handle_save_config(int client_socket, const std::string& body) {
+    if (body.empty()) {
+        send_500(client_socket, "Empty config");
+        return;
+    }
+
+    if (write_file(CONFIG_PATH, body)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"Configuration saved. Restart apps for changes to take effect.\"}");
+        LOGD("Configuration updated");
+    } else {
+        send_500(client_socket, "Failed to write config file");
+    }
+}
+
+void handle_get_logs(int client_socket) {
+    // Get last 500 lines of DANR-related logs from logcat
+    std::string cmd = "logcat -d -t 500 | grep -E '(DANR|danr)' 2>/dev/null";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        send_500(client_socket, "Failed to read logs");
+        return;
+    }
+
+    std::string logs;
+    char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        logs += buffer;
+    }
+    pclose(pipe);
+
+    send_response(client_socket, 200, "OK", "text/plain; charset=utf-8", logs);
+}
+
+void* handle_client(void* arg) {
+    int client_socket = *(int*)arg;
+    free(arg);
+
+    char buffer[BUFFER_SIZE];
+    int bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
+
+    if (bytes_read <= 0) {
+        close(client_socket);
+        return nullptr;
+    }
+
+    buffer[bytes_read] = '\0';
+
+    // Parse HTTP request
+    char method[16], path[256], protocol[16];
+    sscanf(buffer, "%s %s %s", method, path, protocol);
+
+    LOGD("Request: %s %s", method, path);
+
+    // Find body (after \r\n\r\n)
+    char* body_start = strstr(buffer, "\r\n\r\n");
+    std::string body;
+    if (body_start) {
+        body = std::string(body_start + 4);
+    }
+
+    // Route requests
+    if (strcmp(method, "GET") == 0) {
+        if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
+            std::string html = read_file((std::string(WEB_ROOT) + "/index.html").c_str());
+            if (!html.empty()) {
+                send_html(client_socket, html);
+            } else {
+                send_404(client_socket);
+            }
+        } else if (strcmp(path, "/api/config") == 0) {
+            handle_get_config(client_socket);
+        } else if (strcmp(path, "/api/packages") == 0) {
+            handle_get_packages(client_socket);
+        } else if (strcmp(path, "/api/logs") == 0) {
+            handle_get_logs(client_socket);
+        } else if (strncmp(path, "/style.css", 10) == 0) {
+            std::string css = read_file((std::string(WEB_ROOT) + "/style.css").c_str());
+            if (!css.empty()) {
+                send_response(client_socket, 200, "OK", "text/css", css);
+            } else {
+                send_404(client_socket);
+            }
+        } else if (strncmp(path, "/app.js", 7) == 0) {
+            std::string js = read_file((std::string(WEB_ROOT) + "/app.js").c_str());
+            if (!js.empty()) {
+                send_response(client_socket, 200, "OK", "application/javascript", js);
+            } else {
+                send_404(client_socket);
+            }
+        } else {
+            send_404(client_socket);
+        }
+    } else if (strcmp(method, "POST") == 0) {
+        if (strcmp(path, "/api/config") == 0) {
+            handle_save_config(client_socket, body);
+        } else {
+            send_404(client_socket);
+        }
+    } else if (strcmp(method, "OPTIONS") == 0) {
+        // CORS preflight
+        send_response(client_socket, 200, "OK", "text/plain", "");
+    } else {
+        send_response(client_socket, 405, "Method Not Allowed", "text/plain", "Method not allowed");
+    }
+
+    close(client_socket);
+    return nullptr;
+}
+
+int main() {
+    // Set up signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    LOGD("Starting DANR configuration web server on port %d", PORT);
+
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0) {
+        LOGE("Failed to create socket");
+        return 1;
+    }
+
+    // Allow port reuse
+    int opt = 1;
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        LOGE("Failed to bind to port %d", PORT);
+        close(server_socket);
+        return 1;
+    }
+
+    if (listen(server_socket, 10) < 0) {
+        LOGE("Failed to listen on socket");
+        close(server_socket);
+        return 1;
+    }
+
+    LOGD("Server listening on http://localhost:%d", PORT);
+    LOGD("Open http://localhost:%d in your browser to configure DANR", PORT);
+
+    while (keep_running) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+
+        int* client_socket = (int*)malloc(sizeof(int));
+        *client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len);
+
+        if (*client_socket < 0) {
+            free(client_socket);
+            if (keep_running) {
+                LOGE("Failed to accept connection");
+            }
+            continue;
+        }
+
+        // Handle in new thread
+        pthread_t thread;
+        pthread_create(&thread, nullptr, handle_client, client_socket);
+        pthread_detach(thread);
+    }
+
+    close(server_socket);
+    LOGD("Server stopped");
+    return 0;
+}

@@ -1,0 +1,7 @@
+id=danr-zygisk
+name=DANR Zygisk Module
+version=1.0.0
+versionCode=1
+author=DANR Team
+description=Runtime injection of DANR SDK into whitelisted apps via Zygisk. Monitor ANRs without rebuilding apps.
+updateJson=

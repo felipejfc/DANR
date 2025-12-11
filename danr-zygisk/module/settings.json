@@ -1,0 +1,59 @@
+{
+  "name": "DANR Zygisk Configuration",
+  "description": "Configure which apps to monitor and DANR settings",
+  "note": "Apps must be restarted after configuration changes. Edit /data/adb/modules/danr-zygisk/config.json manually for full control.",
+  "settings": [
+    {
+      "type": "section",
+      "title": "Quick Setup",
+      "description": "For detailed configuration, edit config.json manually"
+    },
+    {
+      "type": "text",
+      "title": "Status",
+      "description": "Module is active. Add app package names to config.json whitelist to start monitoring."
+    },
+    {
+      "type": "section",
+      "title": "Configuration File Location"
+    },
+    {
+      "type": "text",
+      "title": "Config Path",
+      "description": "/data/adb/modules/danr-zygisk/config.json"
+    },
+    {
+      "type": "section",
+      "title": "Usage Instructions"
+    },
+    {
+      "type": "text",
+      "title": "1. Edit Configuration",
+      "description": "Use a root file manager or terminal to edit config.json"
+    },
+    {
+      "type": "text",
+      "title": "2. Add App Package Names",
+      "description": "Add package names to the 'whitelist' array in config.json"
+    },
+    {
+      "type": "text",
+      "title": "3. Set Backend URL",
+      "description": "Configure 'backendUrl' in danrConfig section"
+    },
+    {
+      "type": "text",
+      "title": "4. Restart Apps",
+      "description": "Force stop and restart apps or reboot device"
+    },
+    {
+      "type": "section",
+      "title": "Example Configuration"
+    },
+    {
+      "type": "text",
+      "title": "Sample config.json",
+      "description": "{\n  \"whitelist\": [\"com.example.app\"],\n  \"danrConfig\": {\n    \"backendUrl\": \"http://server:8080\",\n    \"anrThresholdMs\": 5000,\n    \"enableWebSocket\": true,\n    \"enableStressTesting\": false\n  }\n}"
+    }
+  ]
+}

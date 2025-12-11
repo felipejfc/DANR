@@ -1,0 +1,24 @@
+# Build outputs
+build/
+jni/build-*/
+module/zygisk/
+module/bin/
+module/web/
+module/danr-sdk.dex
+module/config.json.default
+*.zip
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Gradle
+.gradle/
+*.iml
+.idea/
+local.properties
+
+# Temp files
+temp/
+*.log

@@ -4,11 +4,12 @@ A comprehensive development-time ANR (Application Not Responding) debugging and 
 
 ## Overview
 
-DANR consists of three main components:
+DANR consists of four main components:
 
 1. **Android SDK** - Kotlin library that detects and reports ANRs from your Android app
-2. **Backend** - Node.js/TypeScript API that receives and processes ANR reports
-3. **Frontend** - Next.js web application for visualizing and analyzing ANRs
+2. **Zygisk Module** - Runtime injection for monitoring apps without rebuilding (root required)
+3. **Backend** - Node.js/TypeScript API that receives and processes ANR reports
+4. **Frontend** - Next.js web application for visualizing and analyzing ANRs
 
 ## Features
 
@@ -77,7 +78,21 @@ make sdk-build
 
 This builds the SDK and publishes it to your local Maven repository.
 
-## Using the Android SDK
+## Integration Options
+
+DANR offers two ways to integrate ANR monitoring into your apps:
+
+### Option 1: SDK Integration (Standard)
+Best for apps you're actively developing. Requires code changes and rebuilding.
+
+### Option 2: Zygisk Module (Runtime Injection)
+Best for monitoring release apps without rebuilding. Requires root access.
+
+See [danr-zygisk/README.md](danr-zygisk/README.md) for Zygisk module documentation.
+
+---
+
+## Using the Android SDK (Option 1)
 
 ### 1. Add the SDK to your Android project
 
@@ -172,6 +187,13 @@ danr/
 │   │   │   └── reporter/                  # Network reporting
 │   │   └── build.gradle.kts
 │   └── build.gradle.kts
+│
+├── danr-zygisk/           # Zygisk runtime injection module
+│   ├── jni/                                # C++ native code
+│   ├── module/                             # Magisk module files
+│   ├── config/                             # Default configuration
+│   ├── build.sh                            # Build script
+│   └── README.md                           # Zygisk documentation
 │
 ├── backend/               # Node.js/TypeScript API
 │   ├── src/

@@ -1,0 +1,10 @@
+{
+  "whitelist": [],
+  "danrConfig": {
+    "backendUrl": "http://your-backend-server:8080",
+    "anrThresholdMs": 5000,
+    "enableInRelease": true,
+    "enableInDebug": true,
+    "autoStart": true
+  }
+}

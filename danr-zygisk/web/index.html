@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DANR Zygisk Configuration</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔧 DANR Zygisk Configuration</h1>
+            <p>Configure which apps to monitor for ANRs</p>
+        </header>
+
+        <div id="status" class="status hidden"></div>
+
+        <section class="card">
+            <h2>Backend Configuration</h2>
+            <div class="form-group">
+                <label for="backendUrl">Backend URL</label>
+                <input type="text" id="backendUrl" placeholder="http://192.168.1.100:8080">
+                <small>URL of your DANR backend server</small>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="anrThreshold">ANR Threshold (ms)</label>
+                    <input type="number" id="anrThreshold" value="5000" min="1000" step="100">
+                    <small>Milliseconds before considering thread blocked</small>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enableInRelease" checked>
+                        Enable in Release Builds
+                    </label>
+                    <small>Enable DANR monitoring in release builds</small>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enableInDebug" checked>
+                        Enable in Debug Builds
+                    </label>
+                    <small>Enable DANR monitoring in debug builds</small>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="autoStart" checked>
+                        Auto Start
+                    </label>
+                    <small>Automatically start monitoring on initialization</small>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="section-header">
+                <h2>App Whitelist</h2>
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search apps...">
+                    <span class="search-icon">🔍</span>
+                </div>
+            </div>
+
+            <div class="app-selection">
+                <div class="selection-controls">
+                    <button id="selectAll" class="btn-secondary">Select All</button>
+                    <button id="deselectAll" class="btn-secondary">Deselect All</button>
+                    <span class="selected-count">Selected: <strong id="selectedCount">0</strong></span>
+                </div>
+
+                <div id="appList" class="app-list">
+                    <div class="loading">Loading installed apps...</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="section-header">
+                <h2>DANR Logs</h2>
+                <div class="log-controls">
+                    <input type="text" id="logSearch" placeholder="Filter logs...">
+                    <button id="refreshLogs" class="btn-secondary">🔄 Refresh</button>
+                    <button id="clearLogs" class="btn-secondary">🗑️ Clear</button>
+                    <label>
+                        <input type="checkbox" id="autoRefresh">
+                        Auto-refresh
+                    </label>
+                    <label>
+                        Max lines:
+                        <input type="number" id="maxLogLines" value="100" min="10" max="1000" step="10" style="width: 70px;">
+                    </label>
+                </div>
+            </div>
+            <div class="log-viewer" id="logViewer">
+                <div class="loading">Click Refresh to load logs...</div>
+            </div>
+        </section>
+
+        <div class="actions">
+            <button id="saveConfig" class="btn-primary">💾 Save Configuration</button>
+            <button id="reloadConfig" class="btn-secondary">🔄 Reload</button>
+        </div>
+
+        <footer>
+            <p>
+                <strong>Note:</strong> Apps must be restarted for changes to take effect.<br>
+                Access this interface at <code>http://localhost:8765</code> or <code>http://&lt;device-ip&gt;:8765</code>
+            </p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

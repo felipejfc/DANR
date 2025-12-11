@@ -45,17 +45,28 @@ object DANR {
         threadInfoCollector = ThreadInfoCollector()
         anrReporter = ANRReporter(config.backendUrl)
         stressTestManager = StressTestManager(context.applicationContext)
-        webSocketClient = WebSocketClient(
-            context.applicationContext,
-            config.backendUrl,
-            stressTestManager!!
-        )
+
+        // WebSocket is optional - may fail due to network security policy
+        try {
+            webSocketClient = WebSocketClient(
+                context.applicationContext,
+                config.backendUrl,
+                stressTestManager!!
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "WebSocketClient creation failed: ${e.javaClass.simpleName}: ${e.message}")
+            webSocketClient = null
+        }
 
         isInitialized = true
         Log.d(TAG, "DANR initialized with backend: ${config.backendUrl}")
 
-        // Connect WebSocket for remote control
-        webSocketClient?.connect()
+        // Connect WebSocket for remote control (may fail due to network policy)
+        try {
+            webSocketClient?.connect()
+        } catch (e: Throwable) {
+            Log.w(TAG, "WebSocket connection failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
 
         if (config.autoStart) {
             start()
