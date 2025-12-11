@@ -6,7 +6,9 @@
       "Bash(adb devices:*)",
       "Bash(adb -s 27261JEGR07342 shell \"su -c ''''stat /data/adb/modules/danr-zygisk/zygisk/arm64-v8a.so''''\")",
       "Bash(adb -s 27261JEGR07342 shell:*)",
-      "Bash(adb:*)"
+      "Bash(adb:*)",
+      "Bash(./gradlew :danr:tasks:*)",
+      "Bash(./gradlew:*)"
     ],
     "deny": [],
     "ask": []

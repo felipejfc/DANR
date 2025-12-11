@@ -1,110 +1,123 @@
 # DANR - ANR Debugging Tool
 
-A comprehensive development-time ANR (Application Not Responding) debugging and analysis tool for Android applications.
+A comprehensive development-time ANR (Application Not Responding) debugging and analysis tool for Android applications. Monitor, collect, and analyze ANRs across your entire Android app portfolio.
 
 ## Overview
 
 DANR consists of four main components:
 
-1. **Android SDK** - Kotlin library that detects and reports ANRs from your Android app
-2. **Zygisk Module** - Runtime injection for monitoring apps without rebuilding (root required)
-3. **Backend** - Node.js/TypeScript API that receives and processes ANR reports
-4. **Frontend** - Next.js web application for visualizing and analyzing ANRs
+| Component | Description | Technology |
+|-----------|-------------|------------|
+| **Android SDK** | Kotlin library that detects and reports ANRs | Kotlin, OkHttp, Coroutines |
+| **Zygisk Module** | Runtime injection for monitoring apps without rebuilding | C++, Zygisk API |
+| **Backend** | API that receives and processes ANR reports | Node.js, TypeScript, MongoDB |
+| **Frontend** | Web dashboard for visualizing and analyzing ANRs | Next.js, React, Tailwind CSS |
 
-## Features
+## Architecture
 
-### Android SDK
-- ✅ Automatic ANR detection on main and background threads
-- ✅ Full thread dump capture
-- ✅ Device and app state collection
-- ✅ Configurable ANR threshold
-- ✅ Works in both debug and release builds
-- ✅ Automatic retry with exponential backoff
+```
+                                    ┌─────────────────────────────────┐
+                                    │         Frontend (Next.js)      │
+                                    │      http://localhost:3000      │
+                                    └────────────────┬────────────────┘
+                                                     │ REST API
+                                                     ▼
+┌─────────────────────────────┐    HTTP/WS    ┌─────────────────────────────┐
+│     Android Device          │──────────────▶│     Backend (Node.js)       │
+│                             │               │    http://localhost:3001    │
+│  ┌───────────────────────┐  │               └────────────────┬────────────┘
+│  │   Target App          │  │                                │
+│  │   ┌───────────────┐   │  │                                ▼
+│  │   │   DANR SDK    │   │  │               ┌─────────────────────────────┐
+│  │   │  (injected)   │   │  │               │       MongoDB               │
+│  │   └───────────────┘   │  │               │    localhost:27017          │
+│  └───────────────────────┘  │               └─────────────────────────────┘
+│                             │
+│  ┌───────────────────────┐  │
+│  │   Zygisk Module       │  │
+│  │   (root required)     │  │
+│  └───────────────────────┘  │
+└─────────────────────────────┘
+```
 
-### Backend
-- ✅ RESTful API for ANR ingestion
-- ✅ MongoDB storage with efficient indexing
-- ✅ Automatic ANR deduplication
-- ✅ Similarity-based grouping/clustering
-- ✅ Analytics and aggregation
-- ✅ Filtering and sorting capabilities
+## Prerequisites & Dependencies
 
-### Frontend
-- ✅ Modern, beautiful UI with Tailwind CSS
-- ✅ ANR list with filtering and sorting
-- ✅ Detailed ANR view with syntax-highlighted stack traces
-- ✅ ANR grouping by similarity
-- ✅ Analytics dashboard with charts
-- ✅ Device and app information display
-- ✅ Thread dump visualization
+### System Requirements
+
+| Requirement | Version | Purpose |
+|------------|---------|---------|
+| Node.js | 20+ | Backend & Frontend |
+| Docker | Latest | MongoDB & containerization |
+| Docker Compose | Latest | Service orchestration |
+| Java/JDK | 17+ | Android SDK build |
+| Android Studio | Latest | SDK development |
+| Android SDK | API 21+ | SDK build tools |
+| Android NDK | r25+ | Zygisk module build |
+
+### For Zygisk Module (Optional)
+
+- Rooted Android device with **Magisk v24.0+**
+- **Zygisk enabled** in Magisk settings
+- Android 8.0+ (API 26+) for InMemoryDexClassLoader support
 
 ## Quick Start
 
-### Prerequisites
+### 1. Clone the Repository
 
-- Node.js 20+
-- Docker and Docker Compose
-- Android Studio (for SDK development)
-- Java 17+ (for building the SDK)
-
-### Setup
-
-1. Clone the repository:
 ```bash
 git clone <repository-url>
 cd danr
 ```
 
-2. Install dependencies:
+### 2. Install Dependencies
+
 ```bash
 make setup
 ```
 
-3. Start all services:
+### 3. Start All Services
+
 ```bash
 make dev
 ```
 
-This will start:
-- MongoDB on `localhost:27017`
-- Backend API on `http://localhost:3001`
-- Frontend UI on `http://localhost:3000`
+This starts:
+- **MongoDB** on `localhost:27017`
+- **Backend API** on `http://localhost:3001`
+- **Frontend UI** on `http://localhost:3000`
 
-### Build the Android SDK
+### 4. Open the Dashboard
 
-```bash
-make sdk-build
-```
-
-This builds the SDK and publishes it to your local Maven repository.
-
-## Integration Options
-
-DANR offers two ways to integrate ANR monitoring into your apps:
-
-### Option 1: SDK Integration (Standard)
-Best for apps you're actively developing. Requires code changes and rebuilding.
-
-### Option 2: Zygisk Module (Runtime Injection)
-Best for monitoring release apps without rebuilding. Requires root access.
-
-See [danr-zygisk/README.md](danr-zygisk/README.md) for Zygisk module documentation.
+Navigate to [http://localhost:3000](http://localhost:3000) to view the ANR dashboard.
 
 ---
 
-## Using the Android SDK (Option 1)
+## Component 1: Android SDK
 
-### 1. Add the SDK to your Android project
+The DANR SDK is a Kotlin library that integrates into your Android app to detect and report ANRs.
 
-Add to your app's `build.gradle.kts`:
+### Features
+
+- Automatic ANR detection on main thread
+- Full thread dump capture when ANR occurs
+- Device and app state collection
+- Configurable ANR threshold
+- WebSocket support for remote control
+- Automatic retry with exponential backoff
+- Works in both debug and release builds
+
+### Integration
+
+#### Add the SDK dependency
 
 ```kotlin
+// app/build.gradle.kts
 dependencies {
     implementation("com.danr:sdk:1.0.0")
 }
 ```
 
-### 2. Initialize DANR in your Application class
+#### Initialize in your Application class
 
 ```kotlin
 import android.app.Application
@@ -116,8 +129,8 @@ class MyApplication : Application() {
         super.onCreate()
 
         val config = DANRConfig(
-            backendUrl = "http://10.0.2.2:3001", // Use 10.0.2.2 for Android emulator
-            anrThresholdMs = 5000,
+            backendUrl = "http://10.0.2.2:3001",  // Use 10.0.2.2 for emulator
+            anrThresholdMs = 5000,                // 5 second threshold
             enableInDebug = true,
             enableInRelease = true,
             autoStart = true
@@ -128,196 +141,397 @@ class MyApplication : Application() {
 }
 ```
 
-### 3. ANRs will be automatically detected and reported
+### Configuration Options
 
-The SDK will:
-- Monitor the main thread for blocks
-- Capture full thread dumps when ANRs occur
-- Collect device and app information
-- Send reports to your backend automatically
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `backendUrl` | String | - | Backend API URL (required) |
+| `anrThresholdMs` | Long | 5000 | Milliseconds before ANR is detected |
+| `enableInRelease` | Boolean | true | Enable in release builds |
+| `enableInDebug` | Boolean | true | Enable in debug builds |
+| `autoStart` | Boolean | true | Start monitoring automatically |
 
-## API Endpoints
-
-### ANRs
-- `POST /api/anrs` - Report a new ANR
-- `GET /api/anrs` - Get all ANRs (supports filtering, sorting, pagination)
-- `GET /api/anrs/:id` - Get specific ANR details
-- `DELETE /api/anrs/:id` - Delete specific ANR
-- `DELETE /api/anrs` - Delete all ANRs
-
-### Groups
-- `GET /api/anrs/groups/all` - Get all ANR groups
-
-### Analytics
-- `GET /api/analytics` - Get analytics data
-
-## Architecture
-
-```
-┌─────────────────┐
-│  Android App    │
-│  (with SDK)     │
-└────────┬────────┘
-         │ HTTP
-         ▼
-┌─────────────────┐
-│  Backend API    │
-│  (Node.js)      │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌─────────────────┐
-│    MongoDB      │◄────│  Frontend UI    │
-│                 │     │   (Next.js)     │
-└─────────────────┘     └─────────────────┘
-```
-
-## Project Structure
-
-```
-danr/
-├── sdk/                    # Android SDK (Kotlin)
-│   ├── danr/              # Library module
-│   │   ├── src/main/java/com/danr/sdk/
-│   │   │   ├── DANR.kt                    # Main SDK interface
-│   │   │   ├── DANRConfig.kt              # Configuration
-│   │   │   ├── models/                    # Data models
-│   │   │   ├── detector/                  # ANR detection
-│   │   │   ├── collectors/                # Data collection
-│   │   │   └── reporter/                  # Network reporting
-│   │   └── build.gradle.kts
-│   └── build.gradle.kts
-│
-├── danr-zygisk/           # Zygisk runtime injection module
-│   ├── jni/                                # C++ native code
-│   ├── module/                             # Magisk module files
-│   ├── config/                             # Default configuration
-│   ├── build.sh                            # Build script
-│   └── README.md                           # Zygisk documentation
-│
-├── backend/               # Node.js/TypeScript API
-│   ├── src/
-│   │   ├── index.ts                       # Server entry point
-│   │   ├── config/                        # Configuration
-│   │   ├── models/                        # Mongoose models
-│   │   ├── routes/                        # API routes
-│   │   ├── services/                      # Business logic
-│   │   └── utils/                         # Utilities
-│   ├── package.json
-│   └── tsconfig.json
-│
-├── frontend/              # Next.js frontend
-│   ├── src/
-│   │   ├── app/                           # App router pages
-│   │   │   ├── page.tsx                   # Home/ANR list
-│   │   │   ├── anr/[id]/page.tsx          # ANR details
-│   │   │   ├── groups/page.tsx            # ANR groups
-│   │   │   └── analytics/page.tsx         # Analytics
-│   │   ├── components/                    # UI components
-│   │   └── lib/                           # Utilities & API client
-│   ├── package.json
-│   └── next.config.js
-│
-├── docker-compose.yml     # Docker orchestration
-├── Makefile              # Build commands
-└── README.md             # This file
-```
-
-## Development
-
-### Makefile Commands
+### Building the SDK
 
 ```bash
-make help              # Show all available commands
-make setup             # Install all dependencies
-make dev               # Start all services
-make build             # Build all components
-make clean             # Clean up containers and volumes
-make logs              # View logs from all services
-make sdk-build         # Build and publish Android SDK
-make backend-install   # Install backend dependencies only
-make frontend-install  # Install frontend dependencies only
+# Build and publish to local Maven repository
+make sdk-build
+
+# Or manually
+cd sdk
+./gradlew clean build publishToMavenLocal
 ```
+
+---
+
+## Component 2: Zygisk Module (Runtime Injection)
+
+The Zygisk module allows you to inject the DANR SDK into **any** Android app at runtime without rebuilding it. This is ideal for monitoring production apps or third-party apps.
+
+### Features
+
+- **No rebuild required** - Inject into release APKs
+- **Selective monitoring** - Whitelist specific apps
+- **Web UI configuration** - Easy setup via browser
+- **Fat DEX packaging** - All dependencies bundled (OkHttp, Gson, Coroutines, etc.)
+- **Multi-architecture** - ARM64, ARM32, x86_64, x86
+
+### Requirements
+
+- Rooted device with **Magisk v24.0+**
+- **Zygisk enabled** in Magisk settings
+- Android 8.0+ (API 26+)
+
+### Building the Module
+
+#### Set Environment Variables
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk
+export ANDROID_HOME=/path/to/android-sdk
+```
+
+#### Build
+
+```bash
+cd danr-zygisk
+./build.sh
+```
+
+Output: `build/outputs/danr-zygisk-v1.0.0.zip`
+
+The build process:
+1. Compiles the DANR SDK
+2. Bundles all dependencies into a **fat DEX** (~6MB)
+3. Compiles native Zygisk libraries for all architectures
+4. Packages everything into a flashable ZIP
+
+### Installation
+
+1. Transfer `danr-zygisk-v1.0.0.zip` to your device
+2. Open **Magisk Manager**
+3. Go to **Modules** → **Install from storage**
+4. Select the ZIP file
+5. **Reboot** the device
+
+### Configuration
+
+#### Option A: Web UI (Recommended)
+
+After reboot, access the configuration web UI:
+
+- **On device**: `http://localhost:8765`
+- **From computer**: `http://<device-ip>:8765`
+
+The Web UI provides:
+- Visual app selection with search
+- Backend URL configuration
+- One-click save
+
+#### Option B: Manual Configuration
+
+Edit the config file directly:
+
+```bash
+adb shell
+su
+vi /data/adb/modules/danr-zygisk/config.json
+```
+
+#### Configuration Format
+
+```json
+{
+  "whitelist": [
+    "com.example.app1",
+    "com.example.app2"
+  ],
+  "danrConfig": {
+    "backendUrl": "http://192.168.1.100:3001",
+    "anrThresholdMs": 5000,
+    "enableInRelease": true,
+    "enableInDebug": true,
+    "autoStart": true
+  }
+}
+```
+
+### Applying Changes
+
+After modifying configuration:
+
+```bash
+# Restart specific app
+adb shell am force-stop com.example.app
+
+# Or reboot device
+adb reboot
+```
+
+### Verifying Installation
+
+```bash
+adb logcat | grep DANR-Zygisk
+```
+
+Expected output:
+```
+DANR-Zygisk: ✓ Package 'com.example.app' IS whitelisted - will inject DANR
+DANR-Zygisk: ✓ Created InMemoryDexClassLoader successfully
+DANR-Zygisk: === ✓ DANR SDK SUCCESSFULLY INITIALIZED ===
+```
+
+---
+
+## Component 3: Backend API
+
+The backend receives ANR reports, stores them in MongoDB, and provides APIs for the frontend.
+
+### Features
+
+- RESTful API for ANR ingestion
+- MongoDB storage with efficient indexing
+- Automatic ANR deduplication
+- Similarity-based grouping/clustering
+- WebSocket for real-time device communication
+- Analytics and aggregation
+
+### API Endpoints
+
+#### ANRs
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/anrs` | Report a new ANR |
+| `GET` | `/api/anrs` | Get all ANRs (with filtering, sorting, pagination) |
+| `GET` | `/api/anrs/:id` | Get specific ANR details |
+| `DELETE` | `/api/anrs/:id` | Delete specific ANR |
+| `DELETE` | `/api/anrs` | Delete all ANRs |
+
+#### Groups
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/anrs/groups/all` | Get all ANR groups |
+
+#### Analytics
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/analytics` | Get analytics data |
+
+#### Health
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check |
 
 ### Environment Variables
 
-#### Backend (.env)
+Create `backend/.env`:
+
 ```bash
 NODE_ENV=development
 PORT=3001
 MONGODB_URI=mongodb://localhost:27017/danr
 ```
 
-#### Frontend (.env.local)
+### Running Standalone
+
+```bash
+cd backend
+npm install
+npm run dev
+```
+
+---
+
+## Component 4: Frontend Dashboard
+
+The frontend provides a web interface for viewing and analyzing ANR reports.
+
+### Features
+
+- Modern UI with Tailwind CSS
+- ANR list with filtering and sorting
+- Detailed ANR view with syntax-highlighted stack traces
+- ANR grouping by similarity
+- Analytics dashboard with charts
+- Device and app information display
+- Real-time updates via WebSocket
+
+### Pages
+
+| Route | Description |
+|-------|-------------|
+| `/` | ANR list and overview |
+| `/anr/[id]` | Detailed ANR view |
+| `/groups` | ANR groups by similarity |
+| `/analytics` | Charts and statistics |
+| `/devices` | Connected devices |
+
+### Environment Variables
+
+Create `frontend/.env.local`:
+
 ```bash
 NEXT_PUBLIC_API_URL=http://localhost:3001
 ```
 
-## Configuration
+### Running Standalone
 
-### SDK Configuration Options
-
-```kotlin
-DANRConfig(
-    backendUrl: String,           // Backend API URL
-    anrThresholdMs: Long = 5000,  // ANR detection threshold in ms
-    enableInRelease: Boolean = true,
-    enableInDebug: Boolean = true,
-    autoStart: Boolean = true     // Start monitoring automatically
-)
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-### ANR Detection
+---
 
-The SDK monitors the main thread by posting a task to the main looper and checking if it executes within the threshold. If the task doesn't execute in time, an ANR is detected.
+## Project Structure
 
-### Grouping Algorithm
+```
+danr/
+├── sdk/                        # Android SDK (Kotlin)
+│   ├── danr/
+│   │   ├── src/main/java/com/danr/sdk/
+│   │   │   ├── DANR.kt                  # Main SDK interface
+│   │   │   ├── DANRConfig.kt            # Configuration data class
+│   │   │   ├── models/                  # Data models (ANRReport, etc.)
+│   │   │   ├── detector/                # ANR detection logic
+│   │   │   ├── collectors/              # Device/App/Thread info collectors
+│   │   │   ├── reporter/                # HTTP reporting
+│   │   │   ├── websocket/               # WebSocket client
+│   │   │   └── stress/                  # Stress testing utilities
+│   │   └── build.gradle.kts
+│   ├── build.gradle.kts
+│   └── settings.gradle.kts
+│
+├── danr-zygisk/                # Zygisk Module (C++)
+│   ├── jni/
+│   │   ├── main.cpp                     # Zygisk module implementation
+│   │   ├── webserver.cpp                # Config web server
+│   │   ├── zygisk.hpp                   # Zygisk API header
+│   │   ├── json.hpp                     # JSON parser
+│   │   └── CMakeLists.txt
+│   ├── module/
+│   │   ├── module.prop                  # Magisk module metadata
+│   │   ├── customize.sh                 # Installation script
+│   │   ├── service.sh                   # Service startup script
+│   │   ├── post-fs-data.sh              # Boot script
+│   │   └── zygisk/                      # Native libs (generated)
+│   ├── web/                             # Web UI files
+│   ├── config/
+│   │   └── config.json                  # Default configuration
+│   └── build.sh                         # Build script
+│
+├── backend/                    # Backend API (Node.js/TypeScript)
+│   ├── src/
+│   │   ├── index.ts                     # Server entry point
+│   │   ├── config/
+│   │   │   └── database.ts              # MongoDB connection
+│   │   ├── models/
+│   │   │   ├── ANR.ts                   # ANR Mongoose model
+│   │   │   └── ANRGroup.ts              # Group model
+│   │   ├── routes/
+│   │   │   └── anrRoutes.ts             # API routes
+│   │   ├── sockets/
+│   │   │   └── deviceSocket.ts          # WebSocket handler
+│   │   └── utils/
+│   │       └── anrProcessor.ts          # ANR processing logic
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── frontend/                   # Frontend (Next.js)
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── page.tsx                 # Home/ANR list
+│   │   │   ├── layout.tsx               # Root layout
+│   │   │   ├── anr/[id]/page.tsx        # ANR details
+│   │   │   ├── groups/page.tsx          # ANR groups
+│   │   │   ├── analytics/page.tsx       # Analytics
+│   │   │   └── devices/page.tsx         # Devices
+│   │   ├── components/ui/               # UI components
+│   │   └── lib/
+│   │       ├── api.ts                   # API client
+│   │       └── utils.ts                 # Utilities
+│   ├── package.json
+│   ├── next.config.js
+│   └── tailwind.config.ts
+│
+├── docker-compose.yml          # Docker orchestration
+├── Makefile                    # Build commands
+└── README.md                   # This file
+```
 
-ANRs are automatically grouped based on stack trace similarity using:
-- SHA-256 hashing for exact duplicates
-- Jaccard similarity for clustering similar ANRs
-- Configurable similarity threshold (70% by default)
+---
+
+## Makefile Commands
+
+```bash
+make help              # Show all available commands
+make setup             # Install all dependencies
+make dev               # Start all services (Docker)
+make build             # Build all Docker images
+make clean             # Stop containers and clean up
+make logs              # View logs from all services
+make sdk-build         # Build Android SDK
+make backend-install   # Install backend dependencies
+make frontend-install  # Install frontend dependencies
+```
+
+---
 
 ## Data Model
 
 ### ANR Document
+
 ```typescript
 {
-  timestamp: Date
-  duration: number
+  timestamp: Date,
+  duration: number,
   mainThread: {
-    name: string
-    id: number
-    state: string
-    stackTrace: string[]
+    name: string,
+    id: number,
+    state: string,
+    stackTrace: string[],
     isMainThread: boolean
-  }
-  allThreads: Thread[]
+  },
+  allThreads: Thread[],
   deviceInfo: {
-    manufacturer: string
-    model: string
-    osVersion: string
-    sdkVersion: number
-    totalRam: number
+    manufacturer: string,
+    model: string,
+    osVersion: string,
+    sdkVersion: number,
+    totalRam: number,
     availableRam: number
-  }
+  },
   appInfo: {
-    packageName: string
-    versionName: string
-    versionCode: number
+    packageName: string,
+    versionName: string,
+    versionCode: number,
     isInForeground: boolean
-  }
-  stackTraceHash: string
-  groupId?: ObjectId
+  },
+  stackTraceHash: string,
+  groupId?: ObjectId,
   occurrenceCount: number
 }
 ```
+
+### Grouping Algorithm
+
+ANRs are automatically grouped based on stack trace similarity:
+- **SHA-256 hashing** for exact duplicates
+- **Jaccard similarity** for clustering similar ANRs
+- **70% similarity threshold** by default
+
+---
 
 ## Troubleshooting
 
 ### Android Emulator Connection
 
-If using an Android emulator, use `10.0.2.2` instead of `localhost` to connect to your host machine:
+Use `10.0.2.2` instead of `localhost`:
 
 ```kotlin
 backendUrl = "http://10.0.2.2:3001"
@@ -325,7 +539,7 @@ backendUrl = "http://10.0.2.2:3001"
 
 ### Physical Device Connection
 
-For physical devices, use your machine's local IP address:
+Use your machine's local IP:
 
 ```kotlin
 backendUrl = "http://192.168.1.XXX:3001"
@@ -333,20 +547,56 @@ backendUrl = "http://192.168.1.XXX:3001"
 
 ### MongoDB Connection Issues
 
-If MongoDB fails to start, ensure port 27017 is not in use:
+Check if port 27017 is in use:
 
 ```bash
 lsof -i :27017
 ```
 
+### Zygisk Module Issues
+
+| Problem | Solution |
+|---------|----------|
+| Module doesn't work | Enable Zygisk in Magisk settings and reboot |
+| Config not found | Check `/data/adb/modules/danr-zygisk/config.json` exists |
+| Wrong package name | Verify with `adb shell pm list packages \| grep <name>` |
+| DEX not found | Verify `danr-sdk.dex` exists in module directory |
+| Connection failed | Check backend URL and network connectivity |
+
+### View Logs
+
+```bash
+# Backend logs
+make logs
+
+# Android SDK logs
+adb logcat | grep DANR
+
+# Zygisk module logs
+adb logcat | grep DANR-Zygisk
+```
+
+---
+
+## Security Considerations
+
+- **Zygisk module requires root** - Use on development/testing devices only
+- **Code injection** - The module injects code into app processes
+- **Backend URL in config** - May contain sensitive information
+- **Network traffic** - ANR reports contain stack traces and device info
+
+---
+
 ## License
 
 MIT
 
+---
+
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request

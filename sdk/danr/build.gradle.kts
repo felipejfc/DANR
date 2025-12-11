@@ -69,3 +69,15 @@ afterEvaluate {
         }
     }
 }
+
+// Task to copy all runtime dependencies for fat DEX creation
+afterEvaluate {
+    tasks.register<Copy>("copyDependencies") {
+        from(configurations.getByName("releaseRuntimeClasspath"))
+        into(layout.buildDirectory.dir("dependencies"))
+    }
+
+    tasks.named("assembleRelease") {
+        finalizedBy("copyDependencies")
+    }
+}
