@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useDevices } from '@/hooks/useDevices'
+import { useDaemonConnection, autoConnectDaemon } from '@/hooks/useDaemonStore'
 import { socketService, Device } from '@/lib/socket'
-import { stressApi, ModuleConfig, DanrConfig, PackageInfo, AllStressStatus } from '@/lib/stressApi'
+import { stressApi, ModuleConfig, DanrConfig, PackageInfo } from '@/lib/stressApi'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -88,6 +89,7 @@ interface DeviceControlPanelProps {
 
 function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   const [activeTab, setActiveTab] = useState('overview')
+  const [stressSubTab, setStressSubTab] = useState('sdk') // Will be set to 'daemon' when daemon connects
   const [loading, setLoading] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
@@ -102,12 +104,16 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
     disk_io: { throughputMBps: 5 },
   })
 
-  // Daemon connection state
-  const [isDaemonConnected, setIsDaemonConnected] = useState(false)
-  const [isDaemonConnecting, setIsDaemonConnecting] = useState(false)
+  // Daemon connection from global store
+  const daemon = useDaemonConnection(device.id)
+  const isDaemonConnected = daemon.isConnected
+  const isDaemonConnecting = daemon.isConnecting
+  const daemonUrl = daemon.url
+  const daemonStressStatus = daemon.stressStatus
+  const [manualDaemonUrl, setManualDaemonUrl] = useState('')
+  const [showManualInput, setShowManualInput] = useState(false)
 
-  // Daemon stress state
-  const [daemonStressStatus, setDaemonStressStatus] = useState<AllStressStatus | null>(null)
+  // Daemon stress configs (local UI state)
   const [daemonStressConfigs, setDaemonStressConfigs] = useState({
     cpu: { threadCount: 4, loadPercentage: 100, durationMs: 300 },
     memory: { targetFreeMB: 100, durationMs: 300 },
@@ -116,9 +122,9 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
     thermal: { maxFrequencyPercent: 100, forceAllCoresOnline: true, durationMs: 300 },
   })
 
-  // Module config state
-  const [config, setConfig] = useState<ModuleConfig>(defaultConfig)
-  const [packages, setPackages] = useState<PackageInfo[]>([])
+  // Module config from daemon store
+  const config = daemon.config || defaultConfig
+  const packages = daemon.packages
   const [packagesLoading, setPackagesLoading] = useState(false)
   const [packageSearch, setPackageSearch] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -171,30 +177,24 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
     return () => socketService.off('stress:status', handleStressStatus)
   }, [device.id])
 
-  // Auto-connect to daemon when device has IP
+  // Initialize manual URL with device IP if available
   useEffect(() => {
-    if (device.ipAddress && !isDaemonConnected && !isDaemonConnecting) {
-      connectToDaemon()
+    if (device.ipAddress && !manualDaemonUrl) {
+      setManualDaemonUrl(`http://${device.ipAddress}:8765`)
     }
   }, [device.ipAddress])
 
-  // Poll daemon stress status
+  // Switch to daemon stress tab when daemon connects
   useEffect(() => {
-    if (!isDaemonConnected) return
-
-    const fetchDaemonStatus = async () => {
-      try {
-        const status = await stressApi.getStatus()
-        setDaemonStressStatus(status)
-      } catch (err) {
-        // Silently fail - daemon may be temporarily unavailable
-      }
+    if (isDaemonConnected) {
+      setStressSubTab('daemon')
     }
-
-    fetchDaemonStatus()
-    const interval = setInterval(fetchDaemonStatus, 2000)
-    return () => clearInterval(interval)
   }, [isDaemonConnected])
+
+  // Auto-connect to daemon (tries persisted URL first, then device IP)
+  useEffect(() => {
+    autoConnectDaemon(device.id, device.ipAddress)
+  }, [device.id, device.ipAddress])
 
   // Cleanup auto-save timeout
   useEffect(() => {
@@ -229,29 +229,20 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
     return () => clearInterval(interval)
   }, [])
 
-  const connectToDaemon = async () => {
-    if (!device.ipAddress) return
+  const connectToDaemon = async (customUrl?: string) => {
+    const targetUrl = customUrl || (device.ipAddress ? `http://${device.ipAddress}:8765` : null)
+    if (!targetUrl) return
 
-    setIsDaemonConnecting(true)
-    const daemonUrl = `http://${device.ipAddress}:8765`
-
-    try {
-      stressApi.setDeviceUrl(daemonUrl)
-      const newConfig = await stressApi.getConfig()
-      setConfig(newConfig)
-      setIsDaemonConnected(true)
-
-      // Also fetch packages
-      try {
-        const pkgs = await stressApi.getPackages()
-        setPackages(pkgs)
-      } catch {}
-    } catch (err) {
-      // Daemon not available - that's ok, some features won't work
-      setIsDaemonConnected(false)
-    } finally {
-      setIsDaemonConnecting(false)
+    const success = await daemon.connect(targetUrl)
+    if (success) {
+      setShowManualInput(false)
+    } else {
+      showMessage('Failed to connect to daemon', 'error')
     }
+  }
+
+  const disconnectDaemon = () => {
+    daemon.disconnect()
   }
 
   const showMessage = (text: string, type: 'success' | 'error') => {
@@ -419,58 +410,52 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   }
 
   // Config handlers
-  const autoSaveConfig = useCallback(async (configToSave: ModuleConfig) => {
+  const saveConfigToStore = useCallback(async (configToSave: ModuleConfig) => {
     if (!isDaemonConnected) return
 
     setSaveStatus('saving')
-    try {
-      await stressApi.saveConfig(configToSave)
+    const success = await daemon.saveConfig(configToSave)
+    if (success) {
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
-    } catch (err) {
+    } else {
       setSaveStatus('error')
       setTimeout(() => setSaveStatus('idle'), 3000)
     }
-  }, [isDaemonConnected])
+  }, [isDaemonConnected, daemon])
 
   const triggerAutoSave = useCallback((newConfig: ModuleConfig) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
     }
     saveTimeoutRef.current = setTimeout(() => {
-      autoSaveConfig(newConfig)
+      saveConfigToStore(newConfig)
     }, 800)
-  }, [autoSaveConfig])
-
-  const updateConfig = (newConfig: ModuleConfig) => {
-    setConfig(newConfig)
-    triggerAutoSave(newConfig)
-  }
+  }, [saveConfigToStore])
 
   const handleAddToWhitelist = (packageName: string) => {
     if (!config.whitelist.includes(packageName)) {
-      updateConfig({ ...config, whitelist: [...config.whitelist, packageName] })
+      const newConfig = { ...config, whitelist: [...config.whitelist, packageName] }
+      triggerAutoSave(newConfig)
     }
   }
 
   const handleRemoveFromWhitelist = (packageName: string) => {
-    updateConfig({ ...config, whitelist: config.whitelist.filter(p => p !== packageName) })
+    const newConfig = { ...config, whitelist: config.whitelist.filter(p => p !== packageName) }
+    triggerAutoSave(newConfig)
   }
 
   const handleDanrConfigChange = (key: keyof DanrConfig, value: string | number | boolean) => {
-    updateConfig({ ...config, danrConfig: { ...config.danrConfig, [key]: value } })
+    const newConfig = { ...config, danrConfig: { ...config.danrConfig, [key]: value } }
+    triggerAutoSave(newConfig)
   }
 
   // Packages
   const fetchPackages = async () => {
     if (!isDaemonConnected) return
     setPackagesLoading(true)
-    try {
-      const pkgs = await stressApi.getPackages()
-      setPackages(pkgs)
-    } catch {} finally {
-      setPackagesLoading(false)
-    }
+    await daemon.refreshPackages()
+    setPackagesLoading(false)
   }
 
   const filteredPackages = packages.filter(pkg => {
@@ -488,12 +473,9 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   const fetchLogs = async () => {
     if (!isDaemonConnected) return
     setLogsLoading(true)
-    try {
-      const logText = await stressApi.getLogs()
-      setLogs(logText)
-    } catch {} finally {
-      setLogsLoading(false)
-    }
+    const logText = await daemon.fetchLogs()
+    setLogs(logText)
+    setLogsLoading(false)
   }
 
   const activeSdkStressCount = Object.values(sdkStressStatuses).filter(s => s.isRunning).length
@@ -528,26 +510,74 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
           </div>
           <div className="flex items-center gap-2">
             {isDaemonConnected ? (
-              <Badge className="bg-green-100 text-green-700 border-green-200">
-                <Server className="h-3 w-3 mr-1" />
-                Daemon
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge className="bg-green-100 text-green-700 border-green-200">
+                  <Server className="h-3 w-3 mr-1" />
+                  Daemon
+                </Badge>
+                <Button variant="ghost" size="sm" onClick={disconnectDaemon} className="h-6 px-2 text-xs text-slate-500">
+                  Disconnect
+                </Button>
+              </div>
             ) : isDaemonConnecting ? (
               <Badge variant="outline" className="text-slate-500">
                 <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                 Connecting...
               </Badge>
-            ) : device.ipAddress ? (
-              <Button variant="outline" size="sm" onClick={connectToDaemon}>
-                Connect Daemon
-              </Button>
-            ) : null}
+            ) : (
+              <div className="flex items-center gap-1">
+                {device.ipAddress && (
+                  <Button variant="outline" size="sm" onClick={() => connectToDaemon()}>
+                    Auto Connect
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowManualInput(!showManualInput)}
+                  className="text-xs"
+                >
+                  {showManualInput ? 'Cancel' : 'Manual'}
+                </Button>
+              </div>
+            )}
             <div className="flex items-center gap-2 px-2 py-1 bg-green-50 rounded-full border border-green-200">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
               <span className="text-xs text-green-700 font-medium">Connected</span>
             </div>
           </div>
         </div>
+
+        {/* Manual daemon URL input */}
+        {showManualInput && !isDaemonConnected && (
+          <div className="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <label className="text-xs text-slate-500 mb-1 block">Daemon URL</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={manualDaemonUrl}
+                onChange={(e) => setManualDaemonUrl(e.target.value)}
+                placeholder="http://192.168.1.100:8765"
+                className="flex-1 px-3 py-1.5 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <Button
+                size="sm"
+                onClick={() => connectToDaemon(manualDaemonUrl)}
+                disabled={!manualDaemonUrl || isDaemonConnecting}
+              >
+                {isDaemonConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connect'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Connected daemon URL display */}
+        {isDaemonConnected && daemonUrl && (
+          <div className="mt-2 text-xs text-slate-500">
+            <Server className="h-3 w-3 inline mr-1" />
+            {daemonUrl}
+          </div>
+        )}
 
         {message && (
           <div className={`flex items-center gap-2 px-4 py-2.5 rounded-lg mt-4 ${
@@ -772,60 +802,98 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
           </TabsContent>
 
           {/* Stress Testing Tab */}
-          <TabsContent value="stress" className="space-y-6 mt-4">
-            {/* SDK-based stress tests */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-slate-700">SDK Stress Tests</h3>
-                {activeSdkStressCount > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      setLoading('sdk_stop_all')
-                      await socketService.stopStressTest(device.id, 'all')
-                      setSdkStressStatuses({})
-                      setLoading(null)
-                    }}
-                    disabled={loading === 'sdk_stop_all'}
-                    className="text-xs border-orange-200 text-orange-600 hover:bg-orange-50"
-                  >
-                    Stop All SDK
-                  </Button>
-                )}
-              </div>
+          <TabsContent value="stress" className="space-y-4 mt-4">
+            <Tabs value={stressSubTab} onValueChange={setStressSubTab}>
+              <TabsList className="w-full">
+                <TabsTrigger value="daemon" className="flex-1">
+                  <Server className="h-4 w-4 mr-1.5" />
+                  Daemon {activeDaemonStressCount > 0 && `(${activeDaemonStressCount})`}
+                  {isDaemonConnected && <span className="ml-1.5 w-2 h-2 bg-green-500 rounded-full" />}
+                </TabsTrigger>
+                <TabsTrigger value="sdk" className="flex-1">
+                  <Smartphone className="h-4 w-4 mr-1.5" />
+                  SDK {activeSdkStressCount > 0 && `(${activeSdkStressCount})`}
+                </TabsTrigger>
+              </TabsList>
 
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { id: 'cpu', name: 'CPU', icon: Cpu, configKey: 'cpu' },
-                  { id: 'memory', name: 'Memory', icon: MemoryStick, configKey: 'memory' },
-                  { id: 'disk_io', name: 'Disk I/O', icon: HardDrive, configKey: 'disk_io' },
-                ].map((test) => {
-                  const status = sdkStressStatuses[test.id]
+              {/* SDK Stress Tab */}
+              <TabsContent value="sdk" className="space-y-4 mt-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-slate-600">SDK-based stress tests run for 5 minutes</p>
+                  {activeSdkStressCount > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        setLoading('sdk_stop_all')
+                        await socketService.stopStressTest(device.id, 'all')
+                        setSdkStressStatuses({})
+                        setLoading(null)
+                      }}
+                      disabled={loading === 'sdk_stop_all'}
+                      className="text-xs border-orange-200 text-orange-600 hover:bg-orange-50"
+                    >
+                      Stop All
+                    </Button>
+                  )}
+                </div>
+
+                <div className="space-y-3">
+                {/* SDK CPU Stress */}
+                {(() => {
+                  const status = sdkStressStatuses['cpu']
                   const isRunning = status?.isRunning || false
-
                   return (
-                    <div key={test.id} className="p-3 border rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
+                    <div className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
-                          <test.icon className="h-4 w-4 text-slate-600" />
-                          <span className="text-sm font-medium">{test.name}</span>
+                          <Cpu className="h-5 w-5 text-slate-600" />
+                          <span className="font-medium">CPU Stress</span>
                         </div>
                         {isRunning && (
-                          <Badge className="bg-green-100 text-green-700 text-xs">
+                          <Badge className="bg-green-100 text-green-700">
                             {formatTime(status.remainingTimeMs)}
                           </Badge>
                         )}
                       </div>
-
+                      {!isRunning && (
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div>
+                            <label className="text-xs text-slate-500 block mb-1">Threads</label>
+                            <select
+                              value={sdkStressConfigs.cpu.threadCount}
+                              onChange={(e) => setSdkStressConfigs(prev => ({
+                                ...prev,
+                                cpu: { ...prev.cpu, threadCount: Number(e.target.value) }
+                              }))}
+                              className="w-full px-2 py-1.5 text-sm border rounded"
+                            >
+                              {[1, 2, 4, 6, 8].map(n => <option key={n} value={n}>{n} threads</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs text-slate-500 block mb-1">Load</label>
+                            <select
+                              value={sdkStressConfigs.cpu.loadPercentage}
+                              onChange={(e) => setSdkStressConfigs(prev => ({
+                                ...prev,
+                                cpu: { ...prev.cpu, loadPercentage: Number(e.target.value) }
+                              }))}
+                              className="w-full px-2 py-1.5 text-sm border rounded"
+                            >
+                              {[25, 50, 75, 100].map(n => <option key={n} value={n}>{n}%</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      )}
                       <Button
                         variant={isRunning ? "destructive" : "outline"}
                         size="sm"
                         className="w-full"
-                        onClick={() => isRunning ? handleStopSdkStress(test.id as any) : handleStartSdkStress(test.id as any)}
+                        onClick={() => isRunning ? handleStopSdkStress('cpu') : handleStartSdkStress('cpu')}
                         disabled={loading?.startsWith('sdk_stress')}
                       >
-                        {loading === `sdk_stress_${isRunning ? 'stop' : 'start'}_${test.id}` ? (
+                        {loading === `sdk_stress_${isRunning ? 'stop' : 'start'}_cpu` ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : isRunning ? (
                           <><Square className="h-3 w-3 mr-1" /> Stop</>
@@ -835,77 +903,215 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                       </Button>
                     </div>
                   )
-                })}
-              </div>
-            </div>
+                })()}
 
-            {/* Daemon-based stress tests */}
-            {isDaemonConnected && (
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-slate-700">Daemon Stress Tests (Advanced)</h3>
-                  {activeDaemonStressCount > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleStopAllDaemonStress}
-                      disabled={loading === 'daemon_stop_all'}
-                      className="text-xs border-orange-200 text-orange-600 hover:bg-orange-50"
-                    >
-                      Stop All Daemon
-                    </Button>
-                  )}
+                {/* SDK Memory Stress */}
+                {(() => {
+                  const status = sdkStressStatuses['memory']
+                  const isRunning = status?.isRunning || false
+                  return (
+                    <div className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <MemoryStick className="h-5 w-5 text-slate-600" />
+                          <span className="font-medium">Memory Pressure</span>
+                        </div>
+                        {isRunning && (
+                          <Badge className="bg-green-100 text-green-700">
+                            {formatTime(status.remainingTimeMs)}
+                          </Badge>
+                        )}
+                      </div>
+                      {!isRunning && (
+                        <div className="mb-3">
+                          <label className="text-xs text-slate-500 block mb-1">Target Free Memory (lower = more pressure)</label>
+                          <select
+                            value={sdkStressConfigs.memory.targetMemoryMB}
+                            onChange={(e) => setSdkStressConfigs(prev => ({
+                              ...prev,
+                              memory: { targetMemoryMB: Number(e.target.value) }
+                            }))}
+                            className="w-full px-2 py-1.5 text-sm border rounded"
+                          >
+                            {[50, 100, 200, 300].map(n => <option key={n} value={n}>{n} MB free</option>)}
+                          </select>
+                        </div>
+                      )}
+                      <Button
+                        variant={isRunning ? "destructive" : "outline"}
+                        size="sm"
+                        className="w-full"
+                        onClick={() => isRunning ? handleStopSdkStress('memory') : handleStartSdkStress('memory')}
+                        disabled={loading?.startsWith('sdk_stress')}
+                      >
+                        {loading === `sdk_stress_${isRunning ? 'stop' : 'start'}_memory` ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : isRunning ? (
+                          <><Square className="h-3 w-3 mr-1" /> Stop</>
+                        ) : (
+                          <><Play className="h-3 w-3 mr-1" /> Start</>
+                        )}
+                      </Button>
+                    </div>
+                  )
+                })()}
+
+                {/* SDK Disk I/O Stress */}
+                {(() => {
+                  const status = sdkStressStatuses['disk_io']
+                  const isRunning = status?.isRunning || false
+                  return (
+                    <div className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <HardDrive className="h-5 w-5 text-slate-600" />
+                          <span className="font-medium">Disk I/O</span>
+                        </div>
+                        {isRunning && (
+                          <Badge className="bg-green-100 text-green-700">
+                            {formatTime(status.remainingTimeMs)}
+                          </Badge>
+                        )}
+                      </div>
+                      {!isRunning && (
+                        <div className="mb-3">
+                          <label className="text-xs text-slate-500 block mb-1">Throughput</label>
+                          <select
+                            value={sdkStressConfigs.disk_io.throughputMBps}
+                            onChange={(e) => setSdkStressConfigs(prev => ({
+                              ...prev,
+                              disk_io: { throughputMBps: Number(e.target.value) }
+                            }))}
+                            className="w-full px-2 py-1.5 text-sm border rounded"
+                          >
+                            {[1, 5, 10, 20].map(n => <option key={n} value={n}>{n} MB/s</option>)}
+                          </select>
+                        </div>
+                      )}
+                      <Button
+                        variant={isRunning ? "destructive" : "outline"}
+                        size="sm"
+                        className="w-full"
+                        onClick={() => isRunning ? handleStopSdkStress('disk_io') : handleStartSdkStress('disk_io')}
+                        disabled={loading?.startsWith('sdk_stress')}
+                      >
+                        {loading === `sdk_stress_${isRunning ? 'stop' : 'start'}_disk_io` ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : isRunning ? (
+                          <><Square className="h-3 w-3 mr-1" /> Stop</>
+                        ) : (
+                          <><Play className="h-3 w-3 mr-1" /> Start</>
+                        )}
+                      </Button>
+                    </div>
+                  )
+                })()}
                 </div>
+              </TabsContent>
 
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-                  {[
-                    { id: 'cpu', name: 'CPU', icon: Cpu, status: daemonStressStatus?.cpu },
-                    { id: 'memory', name: 'Memory', icon: MemoryStick, status: daemonStressStatus?.memory },
-                    { id: 'disk', name: 'Disk I/O', icon: HardDrive, status: daemonStressStatus?.disk_io },
-                    { id: 'network', name: 'Network', icon: Wifi, status: daemonStressStatus?.network },
-                    { id: 'thermal', name: 'Thermal', icon: Thermometer, status: daemonStressStatus?.thermal },
-                  ].map((test) => {
-                    const isRunning = test.status?.isRunning || false
-                    const configKey = test.id as keyof typeof daemonStressConfigs
+              {/* Daemon Stress Tab */}
+              <TabsContent value="daemon" className="space-y-4 mt-4">
+                {!isDaemonConnected ? (
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center">
+                    <Server className="h-8 w-8 mx-auto mb-2 text-slate-400" />
+                    <p className="text-sm text-slate-600 mb-2">Connect to daemon for advanced stress tests</p>
+                    <div className="flex flex-col items-center gap-2">
+                      {device.ipAddress && (
+                        <Button variant="outline" size="sm" onClick={() => connectToDaemon()} disabled={isDaemonConnecting}>
+                          {isDaemonConnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                          Auto Connect
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" onClick={() => setShowManualInput(true)} className="text-xs">
+                        Enter URL manually
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-slate-600">Advanced daemon-based stress tests with configurable duration</p>
+                      {activeDaemonStressCount > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleStopAllDaemonStress}
+                          disabled={loading === 'daemon_stop_all'}
+                          className="text-xs border-orange-200 text-orange-600 hover:bg-orange-50"
+                        >
+                          Stop All
+                        </Button>
+                      )}
+                    </div>
 
+                    <div className="space-y-3">
+                  {/* Daemon CPU Stress */}
+                  {(() => {
+                    const isRunning = daemonStressStatus?.cpu?.isRunning || false
                     return (
-                      <div key={test.id} className="p-3 border rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
+                      <div className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <test.icon className="h-4 w-4 text-slate-600" />
-                            <span className="text-sm font-medium">{test.name}</span>
+                            <Cpu className="h-5 w-5 text-slate-600" />
+                            <span className="font-medium">CPU Stress</span>
                           </div>
-                          {isRunning && test.status && (
-                            <Badge className="bg-green-100 text-green-700 text-xs">
-                              {formatTime(test.status.remainingTimeMs)}
+                          {isRunning && daemonStressStatus?.cpu && (
+                            <Badge className="bg-green-100 text-green-700">
+                              {formatTime(daemonStressStatus.cpu.remainingTimeMs)}
                             </Badge>
                           )}
                         </div>
-
                         {!isRunning && (
-                          <div className="mb-2">
-                            <label className="text-xs text-slate-500">Duration (sec)</label>
-                            <input
-                              type="number"
-                              value={daemonStressConfigs[configKey].durationMs}
-                              onChange={(e) => setDaemonStressConfigs(prev => ({
-                                ...prev,
-                                [configKey]: { ...prev[configKey], durationMs: parseInt(e.target.value) || 300 }
-                              }))}
-                              className="w-full px-2 py-1 text-sm border rounded"
-                              min={10}
-                            />
+                          <div className="grid grid-cols-3 gap-2 mb-3">
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Threads</label>
+                              <select
+                                value={daemonStressConfigs.cpu.threadCount}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  cpu: { ...prev.cpu, threadCount: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[1, 2, 4, 6, 8].map(n => <option key={n} value={n}>{n}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Load %</label>
+                              <select
+                                value={daemonStressConfigs.cpu.loadPercentage}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  cpu: { ...prev.cpu, loadPercentage: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[25, 50, 75, 100].map(n => <option key={n} value={n}>{n}%</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Duration</label>
+                              <select
+                                value={daemonStressConfigs.cpu.durationMs}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  cpu: { ...prev.cpu, durationMs: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[60, 120, 300, 600].map(n => <option key={n} value={n}>{n}s</option>)}
+                              </select>
+                            </div>
                           </div>
                         )}
-
                         <Button
                           variant={isRunning ? "destructive" : "outline"}
                           size="sm"
                           className="w-full"
-                          onClick={() => handleDaemonStressAction(test.id as any, isRunning ? 'stop' : 'start')}
+                          onClick={() => handleDaemonStressAction('cpu', isRunning ? 'stop' : 'start')}
                           disabled={loading?.startsWith('daemon_')}
                         >
-                          {loading === `daemon_${test.id}_${isRunning ? 'stop' : 'start'}` ? (
+                          {loading === `daemon_cpu_${isRunning ? 'stop' : 'start'}` ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : isRunning ? (
                             <><Square className="h-3 w-3 mr-1" /> Stop</>
@@ -915,21 +1121,313 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                         </Button>
                       </div>
                     )
-                  })}
-                </div>
-              </div>
-            )}
+                  })()}
 
-            {!isDaemonConnected && device.ipAddress && (
-              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center">
-                <Server className="h-8 w-8 mx-auto mb-2 text-slate-400" />
-                <p className="text-sm text-slate-600 mb-2">Connect to daemon for advanced stress tests</p>
-                <Button variant="outline" size="sm" onClick={connectToDaemon} disabled={isDaemonConnecting}>
-                  {isDaemonConnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  Connect Daemon
-                </Button>
-              </div>
-            )}
+                  {/* Daemon Memory Stress */}
+                  {(() => {
+                    const isRunning = daemonStressStatus?.memory?.isRunning || false
+                    return (
+                      <div className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <MemoryStick className="h-5 w-5 text-slate-600" />
+                            <span className="font-medium">Memory Pressure</span>
+                          </div>
+                          {isRunning && daemonStressStatus?.memory && (
+                            <Badge className="bg-green-100 text-green-700">
+                              {formatTime(daemonStressStatus.memory.remainingTimeMs)}
+                            </Badge>
+                          )}
+                        </div>
+                        {!isRunning && (
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Target Free MB</label>
+                              <select
+                                value={daemonStressConfigs.memory.targetFreeMB}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  memory: { ...prev.memory, targetFreeMB: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[50, 100, 200, 300, 500].map(n => <option key={n} value={n}>{n} MB</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Duration</label>
+                              <select
+                                value={daemonStressConfigs.memory.durationMs}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  memory: { ...prev.memory, durationMs: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[60, 120, 300, 600].map(n => <option key={n} value={n}>{n}s</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <Button
+                          variant={isRunning ? "destructive" : "outline"}
+                          size="sm"
+                          className="w-full"
+                          onClick={() => handleDaemonStressAction('memory', isRunning ? 'stop' : 'start')}
+                          disabled={loading?.startsWith('daemon_')}
+                        >
+                          {loading === `daemon_memory_${isRunning ? 'stop' : 'start'}` ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : isRunning ? (
+                            <><Square className="h-3 w-3 mr-1" /> Stop</>
+                          ) : (
+                            <><Play className="h-3 w-3 mr-1" /> Start</>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Daemon Disk Stress */}
+                  {(() => {
+                    const isRunning = daemonStressStatus?.disk_io?.isRunning || false
+                    return (
+                      <div className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <HardDrive className="h-5 w-5 text-slate-600" />
+                            <span className="font-medium">Disk I/O</span>
+                          </div>
+                          {isRunning && daemonStressStatus?.disk_io && (
+                            <Badge className="bg-green-100 text-green-700">
+                              {formatTime(daemonStressStatus.disk_io.remainingTimeMs)}
+                            </Badge>
+                          )}
+                        </div>
+                        {!isRunning && (
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Throughput</label>
+                              <select
+                                value={daemonStressConfigs.disk.throughputMBps}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  disk: { ...prev.disk, throughputMBps: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[1, 5, 10, 20, 50].map(n => <option key={n} value={n}>{n} MB/s</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Duration</label>
+                              <select
+                                value={daemonStressConfigs.disk.durationMs}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  disk: { ...prev.disk, durationMs: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[60, 120, 300, 600].map(n => <option key={n} value={n}>{n}s</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <Button
+                          variant={isRunning ? "destructive" : "outline"}
+                          size="sm"
+                          className="w-full"
+                          onClick={() => handleDaemonStressAction('disk', isRunning ? 'stop' : 'start')}
+                          disabled={loading?.startsWith('daemon_')}
+                        >
+                          {loading === `daemon_disk_${isRunning ? 'stop' : 'start'}` ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : isRunning ? (
+                            <><Square className="h-3 w-3 mr-1" /> Stop</>
+                          ) : (
+                            <><Play className="h-3 w-3 mr-1" /> Start</>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Daemon Network Stress */}
+                  {(() => {
+                    const isRunning = daemonStressStatus?.network?.isRunning || false
+                    return (
+                      <div className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <Wifi className="h-5 w-5 text-slate-600" />
+                            <span className="font-medium">Network Shaping</span>
+                          </div>
+                          {isRunning && daemonStressStatus?.network && (
+                            <Badge className="bg-green-100 text-green-700">
+                              {formatTime(daemonStressStatus.network.remainingTimeMs)}
+                            </Badge>
+                          )}
+                        </div>
+                        {!isRunning && (
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Bandwidth Limit</label>
+                              <select
+                                value={daemonStressConfigs.network.bandwidthLimitKbps}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  network: { ...prev.network, bandwidthLimitKbps: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                <option value={0}>Unlimited</option>
+                                {[128, 256, 512, 1024, 2048].map(n => <option key={n} value={n}>{n} kbps</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Latency</label>
+                              <select
+                                value={daemonStressConfigs.network.latencyMs}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  network: { ...prev.network, latencyMs: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[0, 50, 100, 200, 500, 1000].map(n => <option key={n} value={n}>{n} ms</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Packet Loss</label>
+                              <select
+                                value={daemonStressConfigs.network.packetLossPercent}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  network: { ...prev.network, packetLossPercent: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[0, 1, 5, 10, 25, 50].map(n => <option key={n} value={n}>{n}%</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Duration</label>
+                              <select
+                                value={daemonStressConfigs.network.durationMs}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  network: { ...prev.network, durationMs: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[60, 120, 300, 600].map(n => <option key={n} value={n}>{n}s</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <Button
+                          variant={isRunning ? "destructive" : "outline"}
+                          size="sm"
+                          className="w-full"
+                          onClick={() => handleDaemonStressAction('network', isRunning ? 'stop' : 'start')}
+                          disabled={loading?.startsWith('daemon_')}
+                        >
+                          {loading === `daemon_network_${isRunning ? 'stop' : 'start'}` ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : isRunning ? (
+                            <><Square className="h-3 w-3 mr-1" /> Stop</>
+                          ) : (
+                            <><Play className="h-3 w-3 mr-1" /> Start</>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Daemon Thermal Stress */}
+                  {(() => {
+                    const isRunning = daemonStressStatus?.thermal?.isRunning || false
+                    return (
+                      <div className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <Thermometer className="h-5 w-5 text-slate-600" />
+                            <span className="font-medium">Thermal Control</span>
+                          </div>
+                          {isRunning && daemonStressStatus?.thermal && (
+                            <Badge className="bg-green-100 text-green-700">
+                              {formatTime(daemonStressStatus.thermal.remainingTimeMs)}
+                            </Badge>
+                          )}
+                        </div>
+                        {!isRunning && (
+                          <div className="grid grid-cols-3 gap-2 mb-3">
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Max Freq %</label>
+                              <select
+                                value={daemonStressConfigs.thermal.maxFrequencyPercent}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  thermal: { ...prev.thermal, maxFrequencyPercent: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[25, 50, 75, 100].map(n => <option key={n} value={n}>{n}%</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">All Cores</label>
+                              <select
+                                value={daemonStressConfigs.thermal.forceAllCoresOnline ? 'yes' : 'no'}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  thermal: { ...prev.thermal, forceAllCoresOnline: e.target.value === 'yes' }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                <option value="yes">Online</option>
+                                <option value="no">Default</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 block mb-1">Duration</label>
+                              <select
+                                value={daemonStressConfigs.thermal.durationMs}
+                                onChange={(e) => setDaemonStressConfigs(prev => ({
+                                  ...prev,
+                                  thermal: { ...prev.thermal, durationMs: Number(e.target.value) }
+                                }))}
+                                className="w-full px-2 py-1 text-sm border rounded"
+                              >
+                                {[60, 120, 300, 600].map(n => <option key={n} value={n}>{n}s</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <Button
+                          variant={isRunning ? "destructive" : "outline"}
+                          size="sm"
+                          className="w-full"
+                          onClick={() => handleDaemonStressAction('thermal', isRunning ? 'stop' : 'start')}
+                          disabled={loading?.startsWith('daemon_')}
+                        >
+                          {loading === `daemon_thermal_${isRunning ? 'stop' : 'start'}` ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : isRunning ? (
+                            <><Square className="h-3 w-3 mr-1" /> Stop</>
+                          ) : (
+                            <><Play className="h-3 w-3 mr-1" /> Start</>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })()}
+                    </div>
+                  </>
+                )}
+              </TabsContent>
+            </Tabs>
           </TabsContent>
 
           {/* Config Tab */}
@@ -937,15 +1435,18 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
             {!isDaemonConnected ? (
               <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center">
                 <Settings className="h-8 w-8 mx-auto mb-2 text-slate-400" />
-                <p className="text-sm text-slate-600 mb-2">
-                  {device.ipAddress ? 'Connect to daemon to manage module config' : 'Device IP not available'}
-                </p>
-                {device.ipAddress && (
-                  <Button variant="outline" size="sm" onClick={connectToDaemon} disabled={isDaemonConnecting}>
-                    {isDaemonConnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                    Connect Daemon
+                <p className="text-sm text-slate-600 mb-2">Connect to daemon to manage module config</p>
+                <div className="flex flex-col items-center gap-2">
+                  {device.ipAddress && (
+                    <Button variant="outline" size="sm" onClick={() => connectToDaemon()} disabled={isDaemonConnecting}>
+                      {isDaemonConnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Auto Connect
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => setShowManualInput(true)} className="text-xs">
+                    Enter URL manually
                   </Button>
-                )}
+                </div>
               </div>
             ) : (
               <>
@@ -1092,11 +1593,17 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
               <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center">
                 <FileText className="h-8 w-8 mx-auto mb-2 text-slate-400" />
                 <p className="text-sm text-slate-600 mb-2">Connect to daemon to view logs</p>
-                {device.ipAddress && (
-                  <Button variant="outline" size="sm" onClick={connectToDaemon} disabled={isDaemonConnecting}>
-                    Connect Daemon
+                <div className="flex flex-col items-center gap-2">
+                  {device.ipAddress && (
+                    <Button variant="outline" size="sm" onClick={() => connectToDaemon()} disabled={isDaemonConnecting}>
+                      {isDaemonConnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Auto Connect
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => setShowManualInput(true)} className="text-xs">
+                    Enter URL manually
                   </Button>
-                )}
+                </div>
               </div>
             ) : (
               <div>

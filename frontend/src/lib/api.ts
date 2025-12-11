@@ -70,15 +70,6 @@ export interface ANRFilters {
   skip?: number;
 }
 
-export interface AnalyticsData {
-  totalANRs: number;
-  anrsByDevice: { _id: string; count: number }[];
-  anrsByOS: { _id: string; count: number }[];
-  anrsByThread: { _id: string; count: number }[];
-  anrsOverTime: { _id: string; count: number }[];
-  topCrashLocations: { _id: string; count: number }[];
-}
-
 export const anrApi = {
   getAll: async (filters?: ANRFilters) => {
     const response = await api.get('/api/anrs', { params: filters });
@@ -102,11 +93,6 @@ export const anrApi = {
 
   getGroups: async () => {
     const response = await api.get('/api/anrs/groups/all');
-    return response.data;
-  },
-
-  getAnalytics: async () => {
-    const response = await api.get<{ success: boolean; data: AnalyticsData }>('/api/analytics');
     return response.data;
   },
 };

@@ -11,7 +11,8 @@
       "Bash(./gradlew:*)",
       "Bash(ls:*)",
       "Bash(curl -v http://10.0.21.14:8765/api/stress/status)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []

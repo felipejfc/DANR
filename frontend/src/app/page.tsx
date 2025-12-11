@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { anrApi, type ANR } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -8,13 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { format } from 'date-fns'
 import Link from 'next/link'
-import { Trash2, RefreshCw, AlertCircle, Play, Pause } from 'lucide-react'
+import { Trash2, RefreshCw, AlertCircle } from 'lucide-react'
 
 const AUTO_REFRESH_INTERVAL = 5000 // 5 seconds
 
 export default function HomePage() {
-  const [autoRefresh, setAutoRefresh] = useState(false)
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [filters, setFilters] = useState({
     deviceModel: '',
     osVersion: '',
@@ -24,18 +22,11 @@ export default function HomePage() {
     skip: 0,
   })
 
-  const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['anrs', filters],
     queryFn: () => anrApi.getAll(filters),
-    refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
+    refetchInterval: AUTO_REFRESH_INTERVAL,
   })
-
-  // Update last refresh time when data changes
-  useEffect(() => {
-    if (dataUpdatedAt) {
-      setLastRefresh(new Date(dataUpdatedAt))
-    }
-  }, [dataUpdatedAt])
 
   const handleDeleteAll = async () => {
     if (confirm('Are you sure you want to delete all ANRs?')) {
@@ -72,7 +63,7 @@ export default function HomePage() {
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Quick Actions</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent>
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => refetch()} className="flex-1">
                 <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
@@ -88,46 +79,23 @@ export default function HomePage() {
                 Clear All
               </Button>
             </div>
-            <Button
-              size="sm"
-              variant={autoRefresh ? "default" : "outline"}
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className={`w-full ${autoRefresh ? 'bg-green-600 hover:bg-green-700' : ''}`}
-            >
-              {autoRefresh ? (
-                <>
-                  <Pause className="h-4 w-4 mr-2" />
-                  Auto-Refresh ON (5s)
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4 mr-2" />
-                  Auto-Refresh OFF
-                </>
-              )}
-            </Button>
           </CardContent>
         </Card>
 
-        <Card className={`bg-gradient-to-br ${autoRefresh ? 'from-green-50 to-green-100 border-green-200' : 'from-blue-50 to-blue-100 border-blue-200'}`}>
+        <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className={`text-sm font-medium ${autoRefresh ? 'text-green-900' : 'text-blue-900'}`}>Status</CardTitle>
-            {autoRefresh && (
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-              </span>
-            )}
+            <CardTitle className="text-sm font-medium text-green-900">Status</CardTitle>
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+            </span>
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${autoRefresh ? 'text-green-900' : 'text-blue-900'}`}>
-              {isLoading ? 'Refreshing...' : autoRefresh ? 'Live' : 'Active'}
+            <div className="text-2xl font-bold text-green-900">
+              {isLoading ? 'Refreshing...' : 'Live'}
             </div>
-            <p className={`text-xs mt-1 ${autoRefresh ? 'text-green-700' : 'text-blue-700'}`}>
-              {autoRefresh
-                ? `Auto-refreshing every 5s`
-                : `Last updated: ${lastRefresh ? format(lastRefresh, 'HH:mm:ss') : '--:--:--'}`
-              }
+            <p className="text-xs mt-1 text-green-700">
+              Auto-refreshing every 5s
             </p>
           </CardContent>
         </Card>
@@ -137,15 +105,13 @@ export default function HomePage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               Recent ANRs
-              {autoRefresh && isLoading && (
+              {isLoading && (
                 <RefreshCw className="h-4 w-4 animate-spin text-green-600" />
               )}
             </CardTitle>
-            {autoRefresh && (
-              <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                Live
-              </Badge>
-            )}
+            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+              Live
+            </Badge>
           </CardHeader>
           <CardContent>
             {isLoading ? (

@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils'
 import {
   Home,
   Layers,
-  TrendingUp,
   AlertCircle,
   Menu,
   X,
@@ -18,7 +17,6 @@ import { Button } from './ui/button'
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'ANR Groups', href: '/groups', icon: Layers },
-  { name: 'Analytics', href: '/analytics', icon: TrendingUp },
   { name: 'Device Control', href: '/devices', icon: Smartphone },
 ]
 
