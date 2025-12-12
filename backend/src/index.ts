@@ -20,6 +20,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/api', anrRoutes);
 
 app.get('/health', (req, res) => {
+  void req;
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 

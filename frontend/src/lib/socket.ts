@@ -18,7 +18,7 @@ export interface Device {
 
 export interface CommandResponse {
   success: boolean;
-  message: string;
+  message?: string;
   data?: any;
 }
 
@@ -60,6 +60,10 @@ class SocketService {
       this.emit('device:response', data);
     });
 
+    this.socket.on('ui:command_error', (data) => {
+      this.emit('ui:command_error', data);
+    });
+
     this.socket.on('device:status_update', (data) => {
       this.emit('device:status_update', data);
     });
@@ -69,6 +73,19 @@ class SocketService {
     });
 
     return this.socket;
+  }
+
+  private createRequestId(): string {
+    try {
+      const cryptoObj = (globalThis as unknown as { crypto?: unknown }).crypto;
+      if (cryptoObj && typeof (cryptoObj as { randomUUID?: unknown }).randomUUID === 'function') {
+        return (cryptoObj as { randomUUID: () => string }).randomUUID();
+      }
+    } catch {
+      // Ignore and fall back
+    }
+
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
   disconnect() {
@@ -106,20 +123,41 @@ class SocketService {
         return;
       }
 
+      const requestId = this.createRequestId();
       const timeout = setTimeout(() => {
+        this.socket?.off('device:response', responseHandler);
+        this.socket?.off('ui:command_error', commandErrorHandler);
         reject(new Error('Command timeout'));
       }, 10000);
 
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.socket?.off('device:response', responseHandler);
+        this.socket?.off('ui:command_error', commandErrorHandler);
+      };
+
       const responseHandler = (data: any) => {
-        if (data.deviceId === deviceId) {
-          clearTimeout(timeout);
-          this.socket?.off('device:response', responseHandler);
-          resolve(data.response);
+        const responseRequestId = data?.command?.requestId ?? data?.requestId;
+        if (data?.deviceId === deviceId && responseRequestId === requestId) {
+          cleanup();
+          resolve(data.response as CommandResponse);
         }
       };
 
+      const commandErrorHandler = (data: any) => {
+        if (data?.deviceId !== deviceId) return;
+        if (data?.requestId !== requestId) return;
+        cleanup();
+        resolve({
+          success: false,
+          message: data?.message || 'Command failed',
+          data: data,
+        });
+      };
+
       this.socket.on('device:response', responseHandler);
-      this.socket.emit('ui:command', { deviceId, command, params });
+      this.socket.on('ui:command_error', commandErrorHandler);
+      this.socket.emit('ui:command', { deviceId, requestId, command, params });
     });
   }
 
@@ -132,11 +170,12 @@ class SocketService {
   }
 
   async triggerANR(deviceId: string, type: string, durationMs: number = 10000): Promise<CommandResponse> {
-    return this.sendCommand(deviceId, 'trigger_anr', { type, durationMs });
+    // Include both "durationMs" (preferred) and "duration" (legacy) for compatibility.
+    return this.sendCommand(deviceId, 'trigger_anr', { type, durationMs, duration: durationMs });
   }
 
   async toggleCore(deviceId: string, core: number, enable: boolean): Promise<CommandResponse> {
-    return this.sendCommand(deviceId, 'toggle_core', { core, enable });
+    return this.sendCommand(deviceId, 'toggle_core', { coreId: core, enabled: enable });
   }
 
   async getStatus(deviceId: string): Promise<CommandResponse> {

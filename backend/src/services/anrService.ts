@@ -1,5 +1,5 @@
 import ANR, { IANR } from '../models/ANR';
-import ANRGroup, { IANRGroup } from '../models/ANRGroup';
+import ANRGroup from '../models/ANRGroup';
 import {
   generateStackTraceHash,
   calculateSimilarity,

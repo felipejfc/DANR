@@ -63,10 +63,11 @@ router.get('/anrs/:id', async (req: Request, res: Response) => {
     const anr = await getANRById(req.params.id);
 
     if (!anr) {
-      return res.status(404).json({
+      res.status(404).json({
         success: false,
         error: 'ANR not found'
       });
+      return;
     }
 
     res.json({
@@ -100,6 +101,7 @@ router.delete('/anrs/:id', async (req: Request, res: Response) => {
 });
 
 router.delete('/anrs', async (req: Request, res: Response) => {
+  void req;
   try {
     await deleteAllANRs();
 
@@ -117,6 +119,7 @@ router.delete('/anrs', async (req: Request, res: Response) => {
 });
 
 router.get('/anrs/groups/all', async (req: Request, res: Response) => {
+  void req;
   try {
     const groups = await getANRGroups();
 
@@ -134,6 +137,7 @@ router.get('/anrs/groups/all', async (req: Request, res: Response) => {
 });
 
 router.get('/analytics', async (req: Request, res: Response) => {
+  void req;
   try {
     const analytics = await getAnalytics();
 

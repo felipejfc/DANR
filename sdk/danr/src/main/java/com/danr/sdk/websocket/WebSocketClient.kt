@@ -190,7 +190,8 @@ class WebSocketClient(
         }
 
         val anrType = params.getString("type")
-        val duration = params.optLong("duration", 5000L)
+        // Backward/forward compatible: older clients used "duration", newer uses "durationMs"
+        val duration = params.optLong("durationMs", params.optLong("duration", 5000L))
 
         try {
             when (anrType) {
@@ -217,8 +218,18 @@ class WebSocketClient(
             return createResponse(false, "Missing parameters")
         }
 
-        val coreId = params.getInt("coreId")
-        val enabled = params.getBoolean("enabled")
+        // Backward/forward compatible: accept both {coreId, enabled} and {core, enable}
+        val coreId = when {
+            params.has("coreId") -> params.getInt("coreId")
+            params.has("core") -> params.getInt("core")
+            else -> return createResponse(false, "Missing parameter: coreId")
+        }
+
+        val enabled = when {
+            params.has("enabled") -> params.getBoolean("enabled")
+            params.has("enable") -> params.getBoolean("enable")
+            else -> return createResponse(false, "Missing parameter: enabled")
+        }
 
         val success = cpuManager.toggleCore(coreId, enabled)
 

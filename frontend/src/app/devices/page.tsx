@@ -196,7 +196,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
     if (device.ipAddress && !manualDaemonUrl) {
       setManualDaemonUrl(`http://${device.ipAddress}:8765`)
     }
-  }, [device.ipAddress])
+  }, [device.ipAddress, manualDaemonUrl])
 
   // Switch to daemon stress tab when daemon connects
   useEffect(() => {
@@ -386,19 +386,19 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
 
         switch (type) {
           case 'cpu':
-            await stressApi.startCpu({ ...cfg, durationMs })
+            await stressApi.startCpu({ ...(cfg as (typeof daemonStressConfigs)['cpu']), durationMs })
             break
           case 'memory':
-            await stressApi.startMemory({ targetFreeMB: cfg.targetFreeMB, durationMs })
+            await stressApi.startMemory({ ...(cfg as (typeof daemonStressConfigs)['memory']), durationMs })
             break
           case 'disk':
-            await stressApi.startDisk({ throughputMBps: cfg.throughputMBps, durationMs })
+            await stressApi.startDisk({ ...(cfg as (typeof daemonStressConfigs)['disk']), durationMs })
             break
           case 'network':
-            await stressApi.startNetwork({ ...cfg, durationMs })
+            await stressApi.startNetwork({ ...(cfg as (typeof daemonStressConfigs)['network']), durationMs })
             break
           case 'thermal':
-            await stressApi.startThermal({ ...cfg, durationMs })
+            await stressApi.startThermal({ ...(cfg as (typeof daemonStressConfigs)['thermal']), durationMs })
             break
         }
         showMessage(`${type} stress started`, 'success')
