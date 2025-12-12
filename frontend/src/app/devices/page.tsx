@@ -123,11 +123,15 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   })
 
   // Module config from daemon store
-  const config = daemon.config || defaultConfig
+  const storeConfig = daemon.config || defaultConfig
   const packages = daemon.packages
   const [packagesLoading, setPackagesLoading] = useState(false)
   const [packageSearch, setPackageSearch] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  // Local config state for form inputs (prevents input lag during saves)
+  const [localConfig, setLocalConfig] = useState<ModuleConfig>(storeConfig)
+  const isEditingRef = useRef(false)
 
   // Logs state
   const [logs, setLogs] = useState('')
@@ -135,6 +139,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
 
   // Auto-save ref
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const editingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Fetch SDK stress status
   useEffect(() => {
@@ -202,8 +207,18 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
       }
+      if (editingTimeoutRef.current) {
+        clearTimeout(editingTimeoutRef.current)
+      }
     }
   }, [])
+
+  // Sync local config from store when not editing
+  useEffect(() => {
+    if (!isEditingRef.current) {
+      setLocalConfig(storeConfig)
+    }
+  }, [storeConfig])
 
   // Countdown timer for SDK stress tests
   useEffect(() => {
@@ -425,28 +440,45 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   }, [isDaemonConnected, daemon])
 
   const triggerAutoSave = useCallback((newConfig: ModuleConfig) => {
+    // Mark as editing
+    isEditingRef.current = true
+
+    // Clear existing timeouts
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
     }
+    if (editingTimeoutRef.current) {
+      clearTimeout(editingTimeoutRef.current)
+    }
+
+    // Debounced save (1.5s after last keystroke)
     saveTimeoutRef.current = setTimeout(() => {
       saveConfigToStore(newConfig)
-    }, 800)
+    }, 1500)
+
+    // Clear editing flag after user stops typing (2s)
+    editingTimeoutRef.current = setTimeout(() => {
+      isEditingRef.current = false
+    }, 2000)
   }, [saveConfigToStore])
 
   const handleAddToWhitelist = (packageName: string) => {
-    if (!config.whitelist.includes(packageName)) {
-      const newConfig = { ...config, whitelist: [...config.whitelist, packageName] }
+    if (!localConfig.whitelist.includes(packageName)) {
+      const newConfig = { ...localConfig, whitelist: [...localConfig.whitelist, packageName] }
+      setLocalConfig(newConfig)
       triggerAutoSave(newConfig)
     }
   }
 
   const handleRemoveFromWhitelist = (packageName: string) => {
-    const newConfig = { ...config, whitelist: config.whitelist.filter(p => p !== packageName) }
+    const newConfig = { ...localConfig, whitelist: localConfig.whitelist.filter(p => p !== packageName) }
+    setLocalConfig(newConfig)
     triggerAutoSave(newConfig)
   }
 
   const handleDanrConfigChange = (key: keyof DanrConfig, value: string | number | boolean) => {
-    const newConfig = { ...config, danrConfig: { ...config.danrConfig, [key]: value } }
+    const newConfig = { ...localConfig, danrConfig: { ...localConfig.danrConfig, [key]: value } }
+    setLocalConfig(newConfig)
     triggerAutoSave(newConfig)
   }
 
@@ -460,7 +492,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
 
   const filteredPackages = packages.filter(pkg => {
     const searchLower = packageSearch.toLowerCase()
-    const isNotInWhitelist = !config.whitelist.includes(pkg.package)
+    const isNotInWhitelist = !localConfig.whitelist.includes(pkg.package)
     return isNotInWhitelist && (
       pkg.package.toLowerCase().includes(searchLower) ||
       (pkg.label && pkg.label.toLowerCase().includes(searchLower))
@@ -1462,14 +1494,14 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                   <div className="p-4 border rounded-lg">
                     <div className="flex items-center gap-2 mb-3">
                       <Package className="h-4 w-4 text-slate-600" />
-                      <span className="font-medium text-sm">Monitored Apps ({config.whitelist.length})</span>
+                      <span className="font-medium text-sm">Monitored Apps ({localConfig.whitelist.length})</span>
                     </div>
 
-                    {config.whitelist.length === 0 ? (
+                    {localConfig.whitelist.length === 0 ? (
                       <p className="text-sm text-slate-500 text-center py-4">No apps in whitelist</p>
                     ) : (
                       <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {config.whitelist.map((pkg) => {
+                        {localConfig.whitelist.map((pkg) => {
                           const info = getPackageInfo(pkg)
                           return (
                             <div key={pkg} className="flex items-center justify-between p-2 bg-blue-50 rounded text-sm">
@@ -1545,7 +1577,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                       <label className="text-xs text-slate-500">Backend URL</label>
                       <input
                         type="text"
-                        value={config.danrConfig.backendUrl}
+                        value={localConfig.danrConfig.backendUrl}
                         onChange={(e) => handleDanrConfigChange('backendUrl', e.target.value)}
                         className="w-full px-2 py-1 text-sm border rounded"
                       />
@@ -1554,7 +1586,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                       <label className="text-xs text-slate-500">ANR Threshold (ms)</label>
                       <input
                         type="number"
-                        value={config.danrConfig.anrThresholdMs}
+                        value={localConfig.danrConfig.anrThresholdMs}
                         onChange={(e) => handleDanrConfigChange('anrThresholdMs', parseInt(e.target.value) || 5000)}
                         className="w-full px-2 py-1 text-sm border rounded"
                       />
@@ -1575,7 +1607,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                         <span className="text-sm">{item.label}</span>
                         <input
                           type="checkbox"
-                          checked={config.danrConfig[item.key as keyof DanrConfig] as boolean}
+                          checked={localConfig.danrConfig[item.key as keyof DanrConfig] as boolean}
                           onChange={(e) => handleDanrConfigChange(item.key as keyof DanrConfig, e.target.checked)}
                           className="rounded"
                         />
@@ -1636,9 +1668,97 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   )
 }
 
+// Standalone Daemon Connection Panel - for connecting without a device
+// Uses the same daemon store as SDK devices for persistence
+const STANDALONE_DEVICE_ID = 'standalone-daemon'
+
+interface StandaloneDaemonPanelProps {
+  onConnectionChange: (connected: boolean) => void
+}
+
+function StandaloneDaemonPanel({ onConnectionChange }: StandaloneDaemonPanelProps) {
+  const [manualUrl, setManualUrl] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  // Use the same daemon store for persistence
+  const daemon = useDaemonConnection(STANDALONE_DEVICE_ID)
+  const isConnected = daemon.isConnected
+  const isConnecting = daemon.isConnecting
+
+  // Auto-connect on mount if we have a persisted URL
+  useEffect(() => {
+    autoConnectDaemon(STANDALONE_DEVICE_ID, undefined)
+  }, [])
+
+  // Notify parent of connection changes
+  useEffect(() => {
+    onConnectionChange(isConnected)
+  }, [isConnected, onConnectionChange])
+
+  const handleConnect = async () => {
+    if (!manualUrl.trim()) return
+    setError(null)
+
+    const success = await daemon.connect(manualUrl.trim())
+    if (!success) {
+      setError('Failed to connect to daemon')
+    }
+  }
+
+  if (isConnected) {
+    // Create a mock device for the control panel
+    const mockDevice: Device = {
+      id: STANDALONE_DEVICE_ID,
+      model: 'Standalone Daemon',
+      androidVersion: 'N/A',
+      hasRoot: true,
+      connectedAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      ipAddress: daemon.url.replace(/^https?:\/\//, '').replace(/:\d+$/, ''),
+    }
+
+    return <DeviceControlPanel device={mockDevice} />
+  }
+
+  return (
+    <Card className="bg-white mb-6">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg flex items-center justify-center shadow-sm">
+            <Server className="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <CardTitle className="text-base">Manual Daemon Connection</CardTitle>
+            <CardDescription className="text-sm">Connect directly to a daemon without SDK</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={manualUrl}
+            onChange={(e) => setManualUrl(e.target.value)}
+            placeholder="http://192.168.1.100:8765"
+            className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+            onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
+          />
+          <Button onClick={handleConnect} disabled={!manualUrl.trim() || isConnecting} className="bg-purple-600 hover:bg-purple-700">
+            {isConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connect'}
+          </Button>
+        </div>
+        {error && (
+          <p className="text-sm text-red-600 mt-2">{error}</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 // Main Page Component
 export default function DevicesPage() {
   const { devices, isConnected } = useDevices()
+  const [hasStandaloneConnection, setHasStandaloneConnection] = useState(false)
 
   return (
     <div className="container mx-auto px-4 py-8 lg:px-8 max-w-7xl">
@@ -1658,17 +1778,24 @@ export default function DevicesPage() {
       </div>
 
       {devices.length === 0 ? (
-        <Card className="bg-white border-2 border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-              <Smartphone className="h-10 w-10 text-slate-400" />
-            </div>
-            <h3 className="text-lg font-semibold text-slate-900 mb-2">No devices connected</h3>
-            <p className="text-sm text-slate-500 text-center max-w-md">
-              Connect an Android device with the DANR SDK installed to start remote control and testing.
-            </p>
-          </CardContent>
-        </Card>
+        <>
+          {/* Show manual connection only when no SDK devices */}
+          <StandaloneDaemonPanel onConnectionChange={setHasStandaloneConnection} />
+
+          {!hasStandaloneConnection && (
+            <Card className="bg-white border-2 border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-16">
+                <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                  <Smartphone className="h-10 w-10 text-slate-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">No SDK devices connected</h3>
+                <p className="text-sm text-slate-500 text-center max-w-md">
+                  Use the manual connection above to connect to a daemon, or connect an Android device with the DANR SDK installed.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </>
       ) : (
         <div className="space-y-6">
           {devices.map((device) => (
