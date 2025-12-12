@@ -90,8 +90,11 @@ void NetworkStressor::workerFunction() {
     }
 
     // Mark as stopped when duration expires naturally
-    // Rules will be removed in stop()
     markStopped();
+
+    // Remove tc rules when test completes
+    removeTcRules();
+
     LOGD("Network stress worker completed");
 }
 

@@ -147,24 +147,42 @@ void MemoryStressor::workerFunction() {
 
     // Mark as stopped when duration expires naturally
     markStopped();
+
+    // Release memory when test completes
+    releaseMemory();
+
     LOGD("Memory stress worker completed");
 }
 
 void MemoryStressor::releaseMemory() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<void*> toFree;
+    size_t chunkSize;
+    bool useMmap;
+    bool lockMemory;
 
-    size_t chunkSize = static_cast<size_t>(config_.chunkSizeMB) * 1024 * 1024;
-
-    for (void* ptr : allocations_) {
-        if (config_.lockMemory) {
-            munlock(ptr, chunkSize);
-        }
-        freeChunk(ptr, chunkSize);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        chunkSize = static_cast<size_t>(config_.chunkSizeMB) * 1024 * 1024;
+        useMmap = config_.useAnonymousMmap;
+        lockMemory = config_.lockMemory;
+        toFree = std::move(allocations_);
+        allocations_.clear();
+        allocatedBytes_.store(0);
     }
 
-    allocations_.clear();
-    allocatedBytes_.store(0);
-    LOGD("Released all allocated memory");
+    // Free memory outside the lock to avoid deadlock
+    for (void* ptr : toFree) {
+        if (lockMemory) {
+            munlock(ptr, chunkSize);
+        }
+        if (useMmap) {
+            munmap(ptr, chunkSize);
+        } else {
+            free(ptr);
+        }
+    }
+
+    LOGD("Released all allocated memory (%zu chunks)", toFree.size());
 }
 
 long MemoryStressor::getAvailableMemoryMB() const {

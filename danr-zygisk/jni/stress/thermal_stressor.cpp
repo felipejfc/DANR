@@ -112,6 +112,10 @@ void ThermalStressor::workerFunction() {
 
     // Mark as stopped when duration expires naturally
     markStopped();
+
+    // Restore original settings when test completes
+    restoreSettings();
+
     LOGD("Thermal stress worker completed");
 }
 

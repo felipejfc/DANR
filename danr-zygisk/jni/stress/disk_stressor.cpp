@@ -195,6 +195,10 @@ void DiskStressor::workerFunction() {
 
     // Mark as stopped when duration expires naturally
     markStopped();
+
+    // Clean up temp files
+    cleanup();
+
     LOGD("Disk stress worker completed");
 }
 
