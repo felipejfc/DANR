@@ -55,6 +55,24 @@ export interface ThermalStressConfig {
   durationMs?: number;
 }
 
+// CPU Frequency Control types
+export interface CPUFreqConfig {
+  frequency: number;
+  cores?: number[];
+  autoRestoreMs?: number;  // 0 = no auto-restore (default)
+}
+
+export interface CPUFreqStatus {
+  isLimited: boolean;
+  targetMaxFreq: number;
+  actualMaxFreq: number;
+  originalMaxFreq: number;
+  cores: number;
+  availableFreqs: number[];
+  autoRestoreMs: number;
+  remainingRestoreMs: number;
+}
+
 // Configuration types
 export interface DanrConfig {
   backendUrl: string;
@@ -298,6 +316,34 @@ class StressApiClient {
       throw error;
     } finally {
       clearTimeout(timeoutId);
+    }
+  }
+
+  // CPU Frequency Control
+  async getCpuFreqStatus(): Promise<CPUFreqStatus> {
+    const response = await this.request<{ success: boolean; data?: CPUFreqStatus; error?: string }>('/api/cpu/freq/status');
+    if (!response.success || !response.data) {
+      throw new Error(response.error || 'Failed to get CPU frequency status');
+    }
+    return response.data;
+  }
+
+  async setCpuFrequency(config: CPUFreqConfig): Promise<void> {
+    const response = await this.request<ApiResponse>('/api/cpu/freq/set', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to set CPU frequency');
+    }
+  }
+
+  async restoreCpuFrequency(): Promise<void> {
+    const response = await this.request<ApiResponse>('/api/cpu/freq/restore', {
+      method: 'POST',
+    });
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to restore CPU frequency');
     }
   }
 }

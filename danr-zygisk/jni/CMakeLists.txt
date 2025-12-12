@@ -26,6 +26,7 @@ set(STRESS_SOURCES
     stress/network_stressor.cpp
     stress/thermal_stressor.cpp
     stress/stress_manager.cpp
+    cpu_freq_manager.cpp
 )
 
 # Web server executable with stress testing support

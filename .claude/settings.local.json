@@ -12,7 +12,9 @@
       "Bash(ls:*)",
       "Bash(curl -v http://10.0.21.14:8765/api/stress/status)",
       "Bash(docker ps:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(xargs ls:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

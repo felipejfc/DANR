@@ -55,6 +55,13 @@ const CPU_PRESETS = [
   { name: '25%', percentage: 25 },
 ]
 
+const AUTO_RESTORE_OPTIONS = [
+  { label: 'Never', value: 0 },
+  { label: '1 min', value: 60000 },
+  { label: '5 min', value: 300000 },
+  { label: '10 min', value: 600000 },
+]
+
 const defaultConfig: ModuleConfig = {
   whitelist: [],
   danrConfig: {
@@ -95,6 +102,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
 
   // CPU state
   const [selectedFreq, setSelectedFreq] = useState<number | null>(null)
+  const [autoRestoreMs, setAutoRestoreMs] = useState(0)
 
   // SDK Stress state
   const [sdkStressStatuses, setSdkStressStatuses] = useState<Record<string, { isRunning: boolean; remainingTimeMs: number }>>({})
@@ -110,6 +118,7 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
   const isDaemonConnecting = daemon.isConnecting
   const daemonUrl = daemon.url
   const daemonStressStatus = daemon.stressStatus
+  const cpuFreqStatus = daemon.cpuFreqStatus
   const [manualDaemonUrl, setManualDaemonUrl] = useState('')
   const [showManualInput, setShowManualInput] = useState(false)
 
@@ -721,48 +730,85 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
 
           {/* CPU Control Tab */}
           <TabsContent value="cpu" className="space-y-5 mt-4">
-            {!device.hasRoot && (
-              <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 text-amber-700 rounded-lg border border-amber-200">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                <span className="text-sm font-medium">Root access required for CPU control</span>
-              </div>
-            )}
-
-            {device.cpuInfo && (
+            {isDaemonConnected && cpuFreqStatus ? (
               <>
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-700 mb-3">Quick Presets</h3>
-                  <div className="grid grid-cols-4 gap-2">
-                    {CPU_PRESETS.map((preset) => (
-                      <Button
-                        key={preset.name}
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleCPUPreset(preset.percentage)}
-                        disabled={!device.hasRoot || loading === 'cpu_preset'}
-                        className="w-full h-12"
-                      >
-                        {loading === 'cpu_preset' ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <span className="font-semibold">{preset.name}</span>
-                        )}
-                      </Button>
-                    ))}
+                {/* Current Status */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                    <div className="text-xs text-slate-500 mb-1">Original Max</div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      {formatFrequency(cpuFreqStatus.originalMaxFreq)}
+                    </div>
+                  </div>
+                  <div className={`p-4 rounded-lg border ${cpuFreqStatus.isLimited ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className={`text-xs mb-1 ${cpuFreqStatus.isLimited ? 'text-blue-600' : 'text-slate-500'}`}>Target Max</div>
+                    <div className={`text-sm font-semibold ${cpuFreqStatus.isLimited ? 'text-blue-700' : 'text-slate-900'}`}>
+                      {cpuFreqStatus.isLimited ? formatFrequency(cpuFreqStatus.targetMaxFreq) : 'Not limited'}
+                    </div>
+                  </div>
+                  <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                    <div className="text-xs text-green-600 mb-1">Actual Max</div>
+                    <div className="text-sm font-semibold text-green-700">
+                      {formatFrequency(cpuFreqStatus.actualMaxFreq)}
+                    </div>
                   </div>
                 </div>
 
+                {/* Auto-restore countdown */}
+                {cpuFreqStatus.isLimited && cpuFreqStatus.remainingRestoreMs > 0 && (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 rounded-lg border border-amber-200">
+                    <Clock className="h-4 w-4 text-amber-600" />
+                    <span className="text-sm text-amber-700">
+                      Auto-restore in {formatTime(cpuFreqStatus.remainingRestoreMs)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Quick Presets */}
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-700 mb-3">Quick Presets</h3>
+                  <div className="grid grid-cols-4 gap-2">
+                    {CPU_PRESETS.map((preset) => {
+                      const targetFreq = Math.floor(cpuFreqStatus.originalMaxFreq * (preset.percentage / 100))
+                      const isActive = cpuFreqStatus.isLimited && cpuFreqStatus.targetMaxFreq === targetFreq
+                      return (
+                        <Button
+                          key={preset.name}
+                          variant={isActive ? "default" : "outline"}
+                          size="sm"
+                          onClick={async () => {
+                            setLoading('cpu_preset')
+                            try {
+                              await stressApi.setCpuFrequency({ frequency: targetFreq, autoRestoreMs })
+                              showMessage(`CPU frequency set to ${preset.name}`, 'success')
+                            } catch { showMessage('Failed to set frequency', 'error') }
+                            finally { setLoading(null) }
+                          }}
+                          disabled={loading === 'cpu_preset'}
+                          className="w-full h-12"
+                        >
+                          {loading === 'cpu_preset' ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <span className="font-semibold">{preset.name}</span>
+                          )}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Custom Frequency */}
                 <div>
                   <h3 className="text-sm font-semibold text-slate-700 mb-3">Custom Frequency</h3>
                   <div className="flex gap-2">
                     <select
                       value={selectedFreq || ''}
                       onChange={(e) => setSelectedFreq(Number(e.target.value))}
-                      disabled={!device.hasRoot}
                       className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Select frequency...</option>
-                      {device.cpuInfo.availableFreqs.map((freq) => (
+                      {cpuFreqStatus.availableFreqs.map((freq) => (
                         <option key={freq} value={freq}>{formatFrequency(freq)}</option>
                       ))}
                     </select>
@@ -773,13 +819,12 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                         if (!selectedFreq) return
                         setLoading('custom_freq')
                         try {
-                          const response = await socketService.setCPUFrequency(device.id, selectedFreq)
-                          if (response.success) showMessage(`CPU frequency set`, 'success')
-                          else showMessage(response.message || 'Failed', 'error')
-                        } catch { showMessage('Error', 'error') }
+                          await stressApi.setCpuFrequency({ frequency: selectedFreq, autoRestoreMs })
+                          showMessage(`CPU frequency set`, 'success')
+                        } catch { showMessage('Failed to set frequency', 'error') }
                         finally { setLoading(null) }
                       }}
-                      disabled={!device.hasRoot || !selectedFreq || loading === 'custom_freq'}
+                      disabled={!selectedFreq || loading === 'custom_freq'}
                       className="px-6"
                     >
                       {loading === 'custom_freq' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
@@ -787,16 +832,134 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                   </div>
                 </div>
 
+                {/* Auto-restore timeout setting */}
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-700 mb-3">Auto-Restore Timeout</h3>
+                  <div className="flex gap-2">
+                    {AUTO_RESTORE_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        variant={autoRestoreMs === option.value ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setAutoRestoreMs(option.value)}
+                        className="flex-1"
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    {autoRestoreMs === 0 ? 'Frequency will stay limited until manually restored' : `Frequency will auto-restore after ${autoRestoreMs / 60000} minute(s)`}
+                  </p>
+                </div>
+
+                {/* Restore button */}
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleRestore}
-                  disabled={!device.hasRoot || loading === 'restore'}
+                  onClick={async () => {
+                    setLoading('restore')
+                    try {
+                      await stressApi.restoreCpuFrequency()
+                      showMessage('CPU frequency restored', 'success')
+                    } catch { showMessage('Failed to restore frequency', 'error') }
+                    finally { setLoading(null) }
+                  }}
+                  disabled={!cpuFreqStatus.isLimited || loading === 'restore'}
                   className="w-full border-orange-200 text-orange-600 hover:bg-orange-50"
                 >
                   {loading === 'restore' ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                   Restore Original Frequency
                 </Button>
+              </>
+            ) : (
+              <>
+                {/* SDK-based CPU Control (fallback) */}
+                {!isDaemonConnected && (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200">
+                    <Info className="h-4 w-4 text-slate-500" />
+                    <span className="text-sm text-slate-600">Connect to daemon for more reliable CPU control with auto re-apply</span>
+                  </div>
+                )}
+
+                {!device.hasRoot && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 text-amber-700 rounded-lg border border-amber-200">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">Root access required for CPU control</span>
+                  </div>
+                )}
+
+                {device.cpuInfo && (
+                  <>
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-700 mb-3">Quick Presets</h3>
+                      <div className="grid grid-cols-4 gap-2">
+                        {CPU_PRESETS.map((preset) => (
+                          <Button
+                            key={preset.name}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleCPUPreset(preset.percentage)}
+                            disabled={!device.hasRoot || loading === 'cpu_preset'}
+                            className="w-full h-12"
+                          >
+                            {loading === 'cpu_preset' ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <span className="font-semibold">{preset.name}</span>
+                            )}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-700 mb-3">Custom Frequency</h3>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedFreq || ''}
+                          onChange={(e) => setSelectedFreq(Number(e.target.value))}
+                          disabled={!device.hasRoot}
+                          className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Select frequency...</option>
+                          {device.cpuInfo.availableFreqs.map((freq) => (
+                            <option key={freq} value={freq}>{formatFrequency(freq)}</option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={async () => {
+                            if (!selectedFreq) return
+                            setLoading('custom_freq')
+                            try {
+                              const response = await socketService.setCPUFrequency(device.id, selectedFreq)
+                              if (response.success) showMessage(`CPU frequency set`, 'success')
+                              else showMessage(response.message || 'Failed', 'error')
+                            } catch { showMessage('Error', 'error') }
+                            finally { setLoading(null) }
+                          }}
+                          disabled={!device.hasRoot || !selectedFreq || loading === 'custom_freq'}
+                          className="px-6"
+                        >
+                          {loading === 'custom_freq' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRestore}
+                      disabled={!device.hasRoot || loading === 'restore'}
+                      className="w-full border-orange-200 text-orange-600 hover:bg-orange-50"
+                    >
+                      {loading === 'restore' ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                      Restore Original Frequency
+                    </Button>
+                  </>
+                )}
               </>
             )}
           </TabsContent>

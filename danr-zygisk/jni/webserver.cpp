@@ -17,6 +17,7 @@
 #include <android/log.h>
 
 #include "stress/stress_manager.h"
+#include "cpu_freq_manager.h"
 
 #define PORT 8765
 #define BUFFER_SIZE 8192
@@ -450,6 +451,72 @@ void handle_stress_stop_all(int client_socket) {
     send_json(client_socket, "{\"success\":true,\"message\":\"All stress tests stopped\"}");
 }
 
+// ============================================================================
+// CPU Frequency API Handlers
+// ============================================================================
+
+std::vector<int> parse_json_int_array(const std::string& json, const std::string& key) {
+    std::vector<int> result;
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return result;
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return result;
+
+    size_t bracketStart = json.find('[', colonPos);
+    if (bracketStart == std::string::npos) return result;
+
+    size_t bracketEnd = json.find(']', bracketStart);
+    if (bracketEnd == std::string::npos) return result;
+
+    std::string arrayStr = json.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+
+    // Parse comma-separated integers
+    std::istringstream iss(arrayStr);
+    std::string token;
+    while (std::getline(iss, token, ',')) {
+        // Trim whitespace
+        size_t start = token.find_first_not_of(" \t\n\r");
+        if (start != std::string::npos) {
+            int val = atoi(token.c_str() + start);
+            result.push_back(val);
+        }
+    }
+
+    return result;
+}
+
+void handle_cpu_freq_status(int client_socket) {
+    danr::CPUFreqStatus status = danr::CPUFreqManager::getInstance().getStatus();
+    send_json(client_socket, "{\"success\":true,\"data\":" + status.toJson() + "}");
+}
+
+void handle_cpu_freq_set(int client_socket, const std::string& body) {
+    long frequency = parse_json_long(body, "frequency", 0);
+    if (frequency <= 0) {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Invalid frequency\"}");
+        return;
+    }
+
+    std::vector<int> cores = parse_json_int_array(body, "cores");
+    long autoRestoreMs = parse_json_long(body, "autoRestoreMs", 0);
+
+    if (danr::CPUFreqManager::getInstance().setMaxFrequency(frequency, cores, autoRestoreMs)) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"CPU frequency set\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to set CPU frequency\"}");
+    }
+}
+
+void handle_cpu_freq_restore(int client_socket) {
+    if (danr::CPUFreqManager::getInstance().restore()) {
+        send_json(client_socket, "{\"success\":true,\"message\":\"CPU frequency restored\"}");
+    } else {
+        send_json(client_socket, "{\"success\":false,\"error\":\"Failed to restore CPU frequency\"}");
+    }
+}
+
 void* handle_client(void* arg) {
     int client_socket = *(int*)arg;
     free(arg);
@@ -494,6 +561,8 @@ void* handle_client(void* arg) {
             handle_get_logs(client_socket);
         } else if (strcmp(path, "/api/stress/status") == 0) {
             handle_stress_status(client_socket);
+        } else if (strcmp(path, "/api/cpu/freq/status") == 0) {
+            handle_cpu_freq_status(client_socket);
         } else if (strncmp(path, "/style.css", 10) == 0) {
             std::string css = read_file((std::string(WEB_ROOT) + "/style.css").c_str());
             if (!css.empty()) {
@@ -536,6 +605,10 @@ void* handle_client(void* arg) {
             handle_stress_thermal_stop(client_socket);
         } else if (strcmp(path, "/api/stress/stop-all") == 0) {
             handle_stress_stop_all(client_socket);
+        } else if (strcmp(path, "/api/cpu/freq/set") == 0) {
+            handle_cpu_freq_set(client_socket, body);
+        } else if (strcmp(path, "/api/cpu/freq/restore") == 0) {
+            handle_cpu_freq_restore(client_socket);
         } else {
             send_404(client_socket);
         }

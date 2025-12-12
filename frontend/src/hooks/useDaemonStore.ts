@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import { stressApi, ModuleConfig, PackageInfo, AllStressStatus } from '@/lib/stressApi';
+import { stressApi, ModuleConfig, PackageInfo, AllStressStatus, CPUFreqStatus } from '@/lib/stressApi';
 
 interface DaemonConnection {
   isConnected: boolean;
@@ -9,6 +9,7 @@ interface DaemonConnection {
   config: ModuleConfig | null;
   packages: PackageInfo[];
   stressStatus: AllStressStatus | null;
+  cpuFreqStatus: CPUFreqStatus | null;
 }
 
 interface DaemonStore {
@@ -24,6 +25,7 @@ const defaultConnection: DaemonConnection = {
   config: null,
   packages: [],
   stressStatus: null,
+  cpuFreqStatus: null,
 };
 
 // Global store - persists across component mounts
@@ -135,6 +137,7 @@ function disconnectDaemon(deviceId: string) {
     config: null,
     packages: [],
     stressStatus: null,
+    cpuFreqStatus: null,
   });
 }
 
@@ -150,8 +153,20 @@ function startPolling(deviceId: string) {
 
     try {
       stressApi.setDeviceUrl(connection.url);
-      const status = await stressApi.getStatus();
-      setConnection(deviceId, { stressStatus: status });
+
+      // Fetch stress status and CPU freq status in parallel
+      const [stressStatus, cpuFreqStatus] = await Promise.all([
+        stressApi.getStatus().catch(() => null),
+        stressApi.getCpuFreqStatus().catch(() => null),
+      ]);
+
+      const updates: Partial<DaemonConnection> = {};
+      if (stressStatus) updates.stressStatus = stressStatus;
+      if (cpuFreqStatus) updates.cpuFreqStatus = cpuFreqStatus;
+
+      if (Object.keys(updates).length > 0) {
+        setConnection(deviceId, updates);
+      }
     } catch {
       // Silently fail - daemon may be temporarily unavailable
     }

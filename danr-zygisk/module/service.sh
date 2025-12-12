@@ -77,3 +77,16 @@ log -t DANR-Service "Access: http://localhost:8765"
 # Build app label cache in background (non-blocking)
 log -t DANR-Cache "Building app label cache in background..."
 sh "$MODDIR/build-label-cache.sh" > /dev/null 2>&1 &
+
+# Start watchdog to auto-restart daemon if it crashes
+(
+    while true; do
+        sleep 30  # Check every 30 seconds
+        if ! pgrep -f danr-webserver > /dev/null; then
+            log -t DANR-Watchdog "Daemon not running, restarting..."
+            chmod 755 "$BINARY"
+            "$BINARY" > /dev/null 2>&1 &
+            log -t DANR-Watchdog "Daemon restarted"
+        fi
+    done
+) &
