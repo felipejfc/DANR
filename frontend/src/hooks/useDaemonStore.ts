@@ -40,6 +40,9 @@ const pollingIntervals: Record<string, NodeJS.Timeout> = {};
 // localStorage key for persisted URLs
 const STORAGE_KEY = 'daemon_urls';
 
+// Standalone device ID - must match the one used in devices/page.tsx
+const STANDALONE_DEVICE_ID = 'standalone-daemon';
+
 function getPersistedUrls(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   try {
@@ -287,6 +290,17 @@ export async function autoConnectDaemon(deviceId: string, ipAddress: string | un
 
   // Mark that we've attempted auto-connect (only try once)
   setConnection(deviceId, { autoConnectAttempted: true });
+
+  // Check if standalone daemon is already connected
+  // This allows SDK devices to pick up an existing standalone connection
+  // We use whatever URL standalone has - the device IP might be NAT'd
+  if (deviceId !== STANDALONE_DEVICE_ID) {
+    const standaloneConnection = getConnection(STANDALONE_DEVICE_ID);
+    if (standaloneConnection.isConnected && standaloneConnection.url) {
+      const success = await connectToDaemon(deviceId, standaloneConnection.url);
+      if (success) return true;
+    }
+  }
 
   // First try persisted URL (from previous successful connection)
   const persistedUrl = getPersistedUrl(deviceId);

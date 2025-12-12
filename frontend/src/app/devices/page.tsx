@@ -1119,17 +1119,18 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                       </div>
                       {!isRunning && (
                         <div className="mb-3">
-                          <label className="text-xs text-slate-500 block mb-1">Target Free Memory (lower = more pressure)</label>
-                          <select
+                          <label className="text-xs text-slate-500 block mb-1">Target Free Memory MB (lower = more pressure)</label>
+                          <input
+                            type="number"
+                            min={10}
+                            max={2000}
                             value={sdkStressConfigs.memory.targetMemoryMB}
                             onChange={(e) => setSdkStressConfigs(prev => ({
                               ...prev,
-                              memory: { targetMemoryMB: Number(e.target.value) }
+                              memory: { targetMemoryMB: Number(e.target.value) || 100 }
                             }))}
                             className="w-full px-2 py-1.5 text-sm border rounded"
-                          >
-                            {[50, 100, 200, 300].map(n => <option key={n} value={n}>{n} MB free</option>)}
-                          </select>
+                          />
                         </div>
                       )}
                       <Button
@@ -1338,16 +1339,17 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
                           <div className="grid grid-cols-2 gap-2 mb-3">
                             <div>
                               <label className="text-xs text-slate-500 block mb-1">Target Free MB</label>
-                              <select
+                              <input
+                                type="number"
+                                min={10}
+                                max={2000}
                                 value={daemonStressConfigs.memory.targetFreeMB}
                                 onChange={(e) => setDaemonStressConfigs(prev => ({
                                   ...prev,
-                                  memory: { ...prev.memory, targetFreeMB: Number(e.target.value) }
+                                  memory: { ...prev.memory, targetFreeMB: Number(e.target.value) || 100 }
                                 }))}
                                 className="w-full px-2 py-1 text-sm border rounded"
-                              >
-                                {[50, 100, 200, 300, 500].map(n => <option key={n} value={n}>{n} MB</option>)}
-                              </select>
+                              />
                             </div>
                             <div>
                               <label className="text-xs text-slate-500 block mb-1">Duration</label>
