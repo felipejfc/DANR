@@ -69,6 +69,17 @@ function getPersistedUrl(deviceId: string): string | null {
   return urls[deviceId] || null;
 }
 
+function removePersistedUrl(deviceId: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const urls = getPersistedUrls();
+    delete urls[deviceId];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(urls));
+  } catch {
+    // localStorage not available
+  }
+}
+
 function notifyListeners() {
   store.listeners.forEach((listener) => listener());
 }
@@ -136,12 +147,15 @@ function disconnectDaemon(deviceId: string) {
   setConnection(deviceId, {
     isConnected: false,
     isConnecting: false,
+    autoConnectAttempted: false, // Reset so manual connection can work again
     url: '',
     config: null,
     packages: [],
     stressStatus: null,
     cpuFreqStatus: null,
   });
+  // Remove the persisted URL so auto-connect doesn't reconnect on page refresh
+  removePersistedUrl(deviceId);
 }
 
 function startPolling(deviceId: string) {

@@ -10,20 +10,21 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Trash2, Cpu, Smartphone, Package } from 'lucide-react'
 import { Highlight, themes } from 'prism-react-renderer'
-import { useState } from 'react'
+import { useState, use } from 'react'
 
-export default function ANRDetailPage({ params }: { params: { id: string } }) {
+export default function ANRDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params)
   const router = useRouter()
   const [expandedThreads, setExpandedThreads] = useState<Record<number, boolean>>({})
 
   const { data, isLoading } = useQuery({
-    queryKey: ['anr', params.id],
-    queryFn: () => anrApi.getById(params.id),
+    queryKey: ['anr', id],
+    queryFn: () => anrApi.getById(id),
   })
 
   const handleDelete = async () => {
     if (confirm('Are you sure you want to delete this ANR?')) {
-      await anrApi.delete(params.id)
+      await anrApi.delete(id)
       router.push('/')
     }
   }

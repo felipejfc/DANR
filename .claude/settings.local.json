@@ -14,7 +14,9 @@
       "Bash(docker ps:*)",
       "mcp__ide__getDiagnostics",
       "Bash(xargs ls:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npm install)",
+      "Bash(npm run lint:*)"
     ],
     "deny": [],
     "ask": []
