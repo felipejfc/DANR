@@ -43,9 +43,6 @@ coverage/
 sdk/.gradle/
 sdk/build/
 sdk/*/build/
-sdk/gradlew
-sdk/gradlew.bat
-sdk/gradle/wrapper/gradle-wrapper.jar
 
 # Android Studio
 *.iml
@@ -157,9 +154,7 @@ $RECYCLE.BIN/
 # Docker
 # ====================
 
-*.log
 docker-compose.override.yml
-.dockerignore
 
 # ====================
 # Database
