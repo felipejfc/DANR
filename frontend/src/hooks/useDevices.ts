@@ -17,6 +17,7 @@ export function useDevices() {
     };
 
     const handleDevicesUpdate = (data: { devices: Device[] }) => {
+      console.log('[useDevices] devices:updated received, device count:', data.devices.length, 'ids:', data.devices.map(d => d.id));
       setDevices(data.devices);
     };
 

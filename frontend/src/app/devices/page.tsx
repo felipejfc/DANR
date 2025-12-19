@@ -34,9 +34,12 @@ import {
   Wifi,
   Thermometer,
   Play,
-  Square
+  Square,
+  Flame
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import ProfilerControls from '@/components/profiler/ProfilerControls'
+import Link from 'next/link'
 
 // Constants
 const ANR_TRIGGERS = [
@@ -95,6 +98,14 @@ interface DeviceControlPanelProps {
 }
 
 function DeviceControlPanel({ device }: DeviceControlPanelProps) {
+  // Debug: log mount/unmount
+  useEffect(() => {
+    console.log('[DeviceControlPanel] MOUNTED for device:', device.id);
+    return () => {
+      console.log('[DeviceControlPanel] UNMOUNTED for device:', device.id);
+    };
+  }, [device.id]);
+
   const [activeTab, setActiveTab] = useState('overview')
   const [stressSubTab, setStressSubTab] = useState('sdk') // Will be set to 'daemon' when daemon connects
   const [loading, setLoading] = useState<string | null>(null)
@@ -653,6 +664,10 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
             <TabsTrigger value="stress" className="flex-1 min-w-[80px]">
               <Activity className="h-4 w-4 mr-1.5" />
               Stress {(activeSdkStressCount + activeDaemonStressCount) > 0 && `(${activeSdkStressCount + activeDaemonStressCount})`}
+            </TabsTrigger>
+            <TabsTrigger value="profiler" className="flex-1 min-w-[80px]">
+              <Flame className="h-4 w-4 mr-1.5" />
+              Profiler
             </TabsTrigger>
             <TabsTrigger value="config" className="flex-1 min-w-[80px]">
               <Settings className="h-4 w-4 mr-1.5" />
@@ -1627,6 +1642,34 @@ function DeviceControlPanel({ device }: DeviceControlPanelProps) {
             </Tabs>
           </TabsContent>
 
+          {/* Profiler Tab */}
+          <TabsContent value="profiler" className="space-y-4 mt-4">
+            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+              <h3 className="text-lg font-semibold text-slate-900 mb-2 flex items-center gap-2">
+                <Flame className="h-5 w-5 text-orange-500" />
+                CPU Profiler
+              </h3>
+              <p className="text-sm text-slate-600 mb-4">
+                Capture stack traces at 50ms intervals to generate flame graphs for performance analysis.
+              </p>
+
+              <ProfilerControls
+                deviceId={device.id}
+                hasRoot={device.hasRoot}
+                // onSessionComplete is handled at DevicesPage level to survive device disconnects
+              />
+
+              <div className="mt-4 pt-4 border-t border-slate-200">
+                <Link
+                  href="/profiles"
+                  className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                >
+                  View all profiles <span>&rarr;</span>
+                </Link>
+              </div>
+            </div>
+          </TabsContent>
+
           {/* Config Tab */}
           <TabsContent value="config" className="space-y-4 mt-4">
             {!isDaemonConnected ? (
@@ -1924,6 +1967,24 @@ function StandaloneDaemonPanel({ onConnectionChange }: StandaloneDaemonPanelProp
 export default function DevicesPage() {
   const { devices, isConnected } = useDevices()
   const [hasStandaloneConnection, setHasStandaloneConnection] = useState(false)
+
+  // Global listener for profile session completion
+  // This is at the page level so it won't unmount when device temporarily disconnects
+  useEffect(() => {
+    const handleSessionComplete = (data: { deviceId: string; sessionId: string }) => {
+      console.log('[DevicesPage] Received profile:session_complete', data);
+      // Navigate to the profile page
+      window.location.href = `/profiles/${data.sessionId}`;
+    };
+
+    socketService.on('profile:session_complete', handleSessionComplete);
+    console.log('[DevicesPage] Subscribed to profile:session_complete at page level');
+
+    return () => {
+      socketService.off('profile:session_complete', handleSessionComplete);
+      console.log('[DevicesPage] Unsubscribed from profile:session_complete at page level');
+    };
+  }, []);
 
   return (
     <div className="container mx-auto px-4 py-8 lg:px-8 max-w-7xl">

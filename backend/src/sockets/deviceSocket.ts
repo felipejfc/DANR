@@ -1,6 +1,14 @@
 import { Server as SocketServer, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import { deviceRegistry, Device, CPUInfo } from './deviceRegistry';
+import ProfileSession, { saveSamplesToDisk, saveTraceDataToDisk } from '../models/ProfileSession';
+
+// Store io instance for access from other modules (e.g., HTTP routes)
+let ioInstance: SocketServer | null = null;
+
+export function getSocketIO(): SocketServer | null {
+  return ioInstance;
+}
 
 export interface Command {
   type:
@@ -11,7 +19,10 @@ export interface Command {
     | 'get_status'
     | 'start_stress_test'
     | 'stop_stress_test'
-    | 'get_stress_status';
+    | 'get_stress_status'
+    | 'start_profiling'
+    | 'stop_profiling'
+    | 'get_profile_status';
   params?: any;
   requestId?: string;
 }
@@ -32,6 +43,9 @@ function isCommandType(command: string): command is Command['type'] {
     case 'start_stress_test':
     case 'stop_stress_test':
     case 'get_stress_status':
+    case 'start_profiling':
+    case 'stop_profiling':
+    case 'get_profile_status':
       return true;
     default:
       return false;
@@ -44,7 +58,11 @@ export function setupDeviceSocket(httpServer: HTTPServer): SocketServer {
       origin: '*',
       methods: ['GET', 'POST'],
     },
+    maxHttpBufferSize: Infinity,
   });
+
+  // Store for access from HTTP routes
+  ioInstance = io;
 
   io.on('connection', (socket: Socket) => {
     console.log(`[UI/Device] Socket connected: ${socket.id}`);
@@ -183,6 +201,96 @@ export function setupDeviceSocket(httpServer: HTTPServer): SocketServer {
         stressStatuses: data.stressStatuses,
         timestamp: new Date(),
       });
+    });
+
+    // Profile status update from device
+    socket.on('profile:status', (data: { deviceId: string; status: any }) => {
+      console.log(`Profile status update from device ${data.deviceId}:`, data.status);
+
+      // Broadcast to all UI clients
+      io.emit('profile:status', {
+        deviceId: data.deviceId,
+        status: data.status,
+        timestamp: new Date(),
+      });
+    });
+
+    // Profile data from device (when profiling session completes via WebSocket)
+    socket.on('profile:data', async (data: { deviceId: string; session?: any; sessionCompressed?: string }) => {
+      try {
+        let session = data.session;
+
+        // Handle compressed data (gzip + base64)
+        if (data.sessionCompressed) {
+          const zlib = require('zlib');
+          const compressedBuffer = Buffer.from(data.sessionCompressed, 'base64');
+          const decompressedBuffer = zlib.gunzipSync(compressedBuffer);
+          session = JSON.parse(decompressedBuffer.toString('utf8'));
+        }
+
+        if (!session) {
+          console.error('[profile:data] No session data found');
+          return;
+        }
+
+        const profilerType = session.profilerType || 'java';
+        let samplesFile: string;
+        let totalSamples: number;
+
+        if (profilerType === 'simpleperf') {
+          if (session.traceData) {
+            // For simpleperf: save raw Perfetto trace to disk
+            samplesFile = saveTraceDataToDisk(session.sessionId, session.traceData);
+            totalSamples = 0;  // Raw trace doesn't have sample count
+            console.log(`[profile:data] Saved simpleperf trace for session ${session.sessionId} (${session.traceData.length} base64 chars)`);
+          } else {
+            console.error(`[profile:data] ERROR: simpleperf session ${session.sessionId} has no traceData!`);
+            io.emit('profile:error', {
+              deviceId: data.deviceId,
+              error: 'Simpleperf profiling failed: trace data was not captured. Check device logs for details.',
+              timestamp: new Date(),
+            });
+            return;
+          }
+        } else {
+          // For java profiling: save samples to disk
+          const samples = session.samples || [];
+          samplesFile = saveSamplesToDisk(session.sessionId, samples);
+          totalSamples = session.totalSamples || samples.length;
+        }
+
+        // Save metadata to database
+        const profileSession = new ProfileSession({
+          deviceId: data.deviceId,
+          sessionId: session.sessionId,
+          startTime: new Date(session.startTime),
+          endTime: new Date(session.endTime),
+          samplingIntervalMs: session.samplingIntervalMs,
+          totalSamples,
+          hasRoot: session.hasRoot,
+          profilerType,
+          samplesFile,
+        });
+
+        await profileSession.save();
+
+        // Broadcast completion to all UI clients
+        io.emit('profile:session_complete', {
+          deviceId: data.deviceId,
+          sessionId: session.sessionId,
+          totalSamples: profileSession.totalSamples,
+          profilerType,
+          duration: profileSession.endTime.getTime() - profileSession.startTime.getTime(),
+          timestamp: new Date(),
+        });
+      } catch (error) {
+        console.error('[profile:data] Error saving profile session:', error);
+        io.emit('profile:error', {
+          deviceId: data.deviceId,
+          error: error instanceof Error ? error.message : 'Failed to save profile session',
+          timestamp: new Date(),
+        });
+      }
     });
 
     // Disconnect handling

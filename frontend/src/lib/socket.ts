@@ -72,6 +72,22 @@ class SocketService {
       this.emit('stress:status', data);
     });
 
+    // Profile events
+    this.socket.on('profile:status', (data) => {
+      console.log('[SocketService] Received profile:status from server', data);
+      this.emit('profile:status', data);
+    });
+
+    this.socket.on('profile:session_complete', (data) => {
+      console.log('[SocketService] Received profile:session_complete from server', data);
+      this.emit('profile:session_complete', data);
+    });
+
+    this.socket.on('profile:error', (data) => {
+      console.log('[SocketService] Received profile:error from server', data);
+      this.emit('profile:error', data);
+    });
+
     return this.socket;
   }
 
@@ -100,23 +116,26 @@ class SocketService {
       this.listeners.set(event, new Set());
     }
     this.listeners.get(event)!.add(callback);
+    console.log(`[SocketService] Subscribed to ${event}, now ${this.listeners.get(event)!.size} listeners`);
   }
 
   off(event: string, callback: (data: any) => void) {
     const callbacks = this.listeners.get(event);
     if (callbacks) {
       callbacks.delete(callback);
+      console.log(`[SocketService] Unsubscribed from ${event}, now ${callbacks.size} listeners`);
     }
   }
 
   private emit(event: string, data: any) {
     const callbacks = this.listeners.get(event);
+    console.log(`[SocketService] Emitting ${event} to ${callbacks?.size || 0} listeners`);
     if (callbacks) {
       callbacks.forEach(callback => callback(data));
     }
   }
 
-  sendCommand(deviceId: string, command: string, params?: any): Promise<CommandResponse> {
+  sendCommand(deviceId: string, command: string, params?: any, timeoutMs: number = 10000): Promise<CommandResponse> {
     return new Promise((resolve, reject) => {
       if (!this.socket?.connected) {
         reject(new Error('Socket not connected'));
@@ -128,7 +147,7 @@ class SocketService {
         this.socket?.off('device:response', responseHandler);
         this.socket?.off('ui:command_error', commandErrorHandler);
         reject(new Error('Command timeout'));
-      }, 10000);
+      }, timeoutMs);
 
       const cleanup = () => {
         clearTimeout(timeout);
@@ -208,6 +227,27 @@ class SocketService {
 
   async getStressStatus(deviceId: string): Promise<CommandResponse> {
     return this.sendCommand(deviceId, 'get_stress_status');
+  }
+
+  // Profiling commands
+  async startProfiling(
+    deviceId: string,
+    config: {
+      samplingIntervalMs?: number;
+      maxDurationMs?: number;
+      useSimpleperf?: boolean;
+    } = {}
+  ): Promise<CommandResponse> {
+    return this.sendCommand(deviceId, 'start_profiling', config);
+  }
+
+  async stopProfiling(deviceId: string): Promise<CommandResponse> {
+    // Use longer timeout for stop_profiling as processing large traces can take time
+    return this.sendCommand(deviceId, 'stop_profiling', {}, 120000); // 2 minute timeout
+  }
+
+  async getProfileStatus(deviceId: string): Promise<CommandResponse> {
+    return this.sendCommand(deviceId, 'get_profile_status');
   }
 }
 

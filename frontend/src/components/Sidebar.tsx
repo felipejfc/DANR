@@ -9,7 +9,8 @@ import {
   AlertCircle,
   Menu,
   X,
-  Smartphone
+  Smartphone,
+  Flame
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from './ui/button'
@@ -18,6 +19,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'ANR Groups', href: '/groups', icon: Layers },
   { name: 'Device Control', href: '/devices', icon: Smartphone },
+  { name: 'CPU Profiles', href: '/profiles', icon: Flame },
 ]
 
 export function Sidebar() {

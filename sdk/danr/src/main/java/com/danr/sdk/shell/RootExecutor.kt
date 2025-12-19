@@ -56,6 +56,26 @@ object RootExecutor {
         }
     }
 
+    /**
+     * Blocking version of execute for use outside of coroutines.
+     * Use with caution - this will block the calling thread.
+     */
+    fun executeBlocking(
+        command: String,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS
+    ): CommandResult {
+        return try {
+            executeCommand(command)
+        } catch (e: Exception) {
+            Log.e(TAG, "Command execution failed: $command", e)
+            CommandResult(
+                success = false,
+                output = "",
+                error = e.message ?: "Unknown error"
+            )
+        }
+    }
+
     private fun executeCommand(command: String): CommandResult {
         var process: Process? = null
         var dataOutputStream: DataOutputStream? = null

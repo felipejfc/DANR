@@ -7,6 +7,7 @@ import com.danr.sdk.collectors.DeviceInfoCollector
 import com.danr.sdk.collectors.ThreadInfoCollector
 import com.danr.sdk.detector.ANRDetector
 import com.danr.sdk.models.ANRReport
+import com.danr.sdk.profiler.CPUProfiler
 import com.danr.sdk.reporter.ANRReporter
 import com.danr.sdk.stress.StressTestManager
 import com.danr.sdk.websocket.WebSocketClient
@@ -26,6 +27,7 @@ object DANR {
     private var anrReporter: ANRReporter? = null
     private var webSocketClient: WebSocketClient? = null
     private var stressTestManager: StressTestManager? = null
+    private var cpuProfiler: CPUProfiler? = null
     private var deviceInfoCollector: DeviceInfoCollector? = null
     private var appInfoCollector: AppInfoCollector? = null
     private var threadInfoCollector: ThreadInfoCollector? = null
@@ -45,11 +47,13 @@ object DANR {
         threadInfoCollector = ThreadInfoCollector()
         anrReporter = ANRReporter(config.backendUrl)
         stressTestManager = StressTestManager(context.applicationContext)
+        cpuProfiler = CPUProfiler(scope, threadInfoCollector!!, context.applicationContext)
 
         webSocketClient = WebSocketClient(
             context.applicationContext,
             config.backendUrl,
-            stressTestManager!!
+            stressTestManager!!,
+            cpuProfiler
         )
 
         isInitialized = true

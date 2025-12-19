@@ -7,13 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { format } from 'date-fns'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useParams } from 'next/navigation'
 import { ArrowLeft, Trash2, Cpu, Smartphone, Package } from 'lucide-react'
 import { Highlight, themes } from 'prism-react-renderer'
-import { useState, use } from 'react'
+import { useState } from 'react'
 
-export default function ANRDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
+export default function ANRDetailPage() {
+  const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [expandedThreads, setExpandedThreads] = useState<Record<number, boolean>>({})
 

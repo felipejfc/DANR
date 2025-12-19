@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { connectDatabase } from './config/database';
 import anrRoutes from './routes/anrRoutes';
+import profileRoutes from './routes/profileRoutes';
 import { setupDeviceSocket } from './sockets/deviceSocket';
 
 dotenv.config();
@@ -14,10 +15,11 @@ const PORT = process.env.PORT || 3001;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/danr';
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: Infinity }));
+app.use(express.urlencoded({ extended: true, limit: Infinity }));
 
 app.use('/api', anrRoutes);
+app.use('/api', profileRoutes);
 
 app.get('/health', (req, res) => {
   void req;

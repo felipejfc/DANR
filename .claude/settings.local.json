@@ -16,7 +16,10 @@
       "Bash(xargs ls:*)",
       "WebSearch",
       "Bash(npm install)",
-      "Bash(npm run lint:*)"
+      "Bash(npm run lint:*)",
+      "Bash(npm install:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker restart:*)"
     ],
     "deny": [],
     "ask": []

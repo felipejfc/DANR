@@ -3,6 +3,8 @@ package com.danr.sdk.websocket
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.danr.sdk.profiler.CPUProfiler
+import com.danr.sdk.profiler.ProfileSession
 import com.danr.sdk.shell.CPUFrequencyManager
 import com.danr.sdk.shell.CPUInfo
 import com.danr.sdk.shell.RootExecutor
@@ -22,7 +24,8 @@ import java.util.UUID
 class WebSocketClient(
     private val context: Context,
     private val backendUrl: String,
-    private val stressTestManager: StressTestManager
+    private val stressTestManager: StressTestManager,
+    private val cpuProfiler: CPUProfiler? = null
 ) {
     private var socket: Socket? = null
     private val deviceId = getDeviceId()
@@ -30,10 +33,12 @@ class WebSocketClient(
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private lateinit var cpuManager: CPUFrequencyManager
     private var autoRestoreJob: Job? = null
+    private var profileStatusJob: Job? = null
 
     companion object {
         private const val TAG = "WebSocketClient"
         private const val AUTO_RESTORE_TIMEOUT_MS = 60000L // 60 seconds
+        private const val PROFILE_STATUS_UPDATE_INTERVAL_MS = 500L // Update UI every 500ms
     }
 
     fun connect() {
@@ -132,6 +137,9 @@ class WebSocketClient(
                     "start_stress_test" -> handleStartStressTest(params)
                     "stop_stress_test" -> handleStopStressTest(params)
                     "get_stress_status" -> handleGetStressStatus()
+                    "start_profiling" -> handleStartProfiling(params)
+                    "stop_profiling" -> handleStopProfiling()
+                    "get_profile_status" -> handleGetProfileStatus()
                     else -> createResponse(false, "Unknown command type: $type")
                 }
 
@@ -426,6 +434,234 @@ class WebSocketClient(
             socket?.emit("stress:status", payload)
             Log.d(TAG, "Sent stress status update")
         }
+    }
+
+    // Profiling handlers
+
+    private suspend fun handleStartProfiling(params: JSONObject?): JSONObject {
+        if (cpuProfiler == null) {
+            return createResponse(false, "CPU profiler not initialized")
+        }
+
+        val samplingIntervalMs = params?.optInt("samplingIntervalMs", 50) ?: 50
+        val maxDurationMs = params?.optLong("maxDurationMs", 60000) ?: 60000
+        val useSimpleperf = params?.optBoolean("useSimpleperf", false) ?: false
+
+        Log.d(TAG, "Starting profiling: samplingInterval=$samplingIntervalMs, maxDuration=$maxDurationMs, useSimpleperf=$useSimpleperf")
+
+        val simpleperfAvailable = cpuProfiler.isSimplePerfAvailable()
+        Log.d(TAG, "Simpleperf available: $simpleperfAvailable")
+
+        val success = cpuProfiler.start(samplingIntervalMs, maxDurationMs, useSimpleperf)
+
+        if (success) {
+            // Send initial status
+            sendProfileStatus()
+
+            // Start periodic status updates
+            startProfileStatusUpdates(maxDurationMs)
+        }
+
+        val profilerType = if (useSimpleperf && cpuProfiler.isSimplePerfAvailable()) "simpleperf" else "java"
+        return createResponse(
+            success,
+            if (success) "Profiling started (interval=${samplingIntervalMs}ms, maxDuration=${maxDurationMs}ms, type=$profilerType)"
+            else "Failed to start profiling - session may already be running"
+        )
+    }
+
+    private suspend fun handleStopProfiling(): JSONObject {
+        if (cpuProfiler == null) {
+            return createResponse(false, "CPU profiler not initialized")
+        }
+
+        // Stop the status update loop
+        stopProfileStatusUpdates()
+
+        val session = cpuProfiler.stop()
+
+        return if (session != null) {
+            // Send profile data to backend
+            sendProfileData(session)
+            createResponse(true, "Profiling stopped, ${session.totalSamples} samples collected")
+        } else {
+            createResponse(false, "No active profiling session")
+        }
+    }
+
+    private fun handleGetProfileStatus(): JSONObject {
+        if (cpuProfiler == null) {
+            return createResponse(false, "CPU profiler not initialized")
+        }
+
+        val status = cpuProfiler.getStatus()
+
+        return JSONObject().apply {
+            put("success", true)
+            put("status", JSONObject().apply {
+                put("state", status.state)
+                put("sessionId", status.sessionId)
+                put("sampleCount", status.sampleCount)
+                put("elapsedTimeMs", status.elapsedTimeMs)
+                put("remainingTimeMs", status.remainingTimeMs)
+                put("samplingIntervalMs", status.samplingIntervalMs)
+            })
+        }
+    }
+
+    private fun sendProfileStatus() {
+        scope.launch {
+            cpuProfiler?.let { profiler ->
+                val status = profiler.getStatus()
+
+                val payload = JSONObject().apply {
+                    put("deviceId", deviceId)
+                    put("status", JSONObject().apply {
+                        put("state", status.state)
+                        put("sessionId", status.sessionId)
+                        put("sampleCount", status.sampleCount)
+                        put("elapsedTimeMs", status.elapsedTimeMs)
+                        put("remainingTimeMs", status.remainingTimeMs)
+                        put("samplingIntervalMs", status.samplingIntervalMs)
+                    })
+                }
+
+                socket?.emit("profile:status", payload)
+                Log.d(TAG, "Sent profile status: state=${status.state}, samples=${status.sampleCount}")
+            }
+        }
+    }
+
+    private fun startProfileStatusUpdates(maxDurationMs: Long) {
+        profileStatusJob?.cancel()
+
+        profileStatusJob = scope.launch {
+            // Add buffer for simpleperf: recording time + conversion time (up to 90s for large traces)
+            val bufferMs = 90000L
+            val endTime = System.currentTimeMillis() + maxDurationMs + bufferMs
+
+            while (System.currentTimeMillis() < endTime) {
+                delay(PROFILE_STATUS_UPDATE_INTERVAL_MS)
+
+                cpuProfiler?.let { profiler ->
+                    val isRunning = profiler.isRunning()
+                    val hasCompleted = profiler.hasCompletedSession()
+
+                    // Check if profiling completed naturally (max duration or max samples reached)
+                    // hasCompletedSession() returns true when not running but samples exist
+                    if (hasCompleted) {
+                        Log.d(TAG, "StatusLoop: Profiling completed! isRunning=$isRunning, hasCompleted=$hasCompleted")
+
+                        val session = profiler.stop()
+                        if (session != null) {
+                            Log.d(TAG, "StatusLoop: Got session with ${session.totalSamples} samples, sending data...")
+                            sendProfileData(session)
+                            Log.d(TAG, "StatusLoop: Profile data sent, now sending idle status...")
+                        } else {
+                            Log.e(TAG, "StatusLoop: Failed to get session after completion!")
+                        }
+
+                        // Send final idle status
+                        sendProfileStatus()
+                        Log.d(TAG, "StatusLoop: Idle status sent, exiting loop")
+                        return@launch
+                    }
+
+                    // Still running - send status update
+                    if (isRunning) {
+                        sendProfileStatus()
+                    }
+                }
+            }
+
+            // Safety: if we exit the loop and profiling somehow finished without us catching it
+            cpuProfiler?.let { profiler ->
+                if (profiler.hasCompletedSession()) {
+                    Log.d(TAG, "Safety check: found completed session at end of status loop")
+                    val session = profiler.stop()
+                    if (session != null) {
+                        sendProfileData(session)
+                    }
+                    sendProfileStatus()
+                }
+            }
+        }
+    }
+
+    private fun stopProfileStatusUpdates() {
+        profileStatusJob?.cancel()
+        profileStatusJob = null
+    }
+
+    private suspend fun sendProfileData(session: ProfileSession) {
+        try {
+            // Convert session to JSON using Gson (can be slow for large sessions)
+            Log.d(TAG, "sendProfileData: Starting serialization for ${session.totalSamples} samples")
+            val sessionJson = gson.toJson(session)
+            Log.d(TAG, "sendProfileData: Serialized, size: ${sessionJson.length} chars")
+
+            // Compress the JSON to reduce payload size (18MB -> ~1-2MB typically)
+            Log.d(TAG, "sendProfileData: Compressing data...")
+            val compressedData = compressString(sessionJson)
+            Log.d(TAG, "sendProfileData: Compressed from ${sessionJson.length} to ${compressedData.size} bytes (${(compressedData.size * 100 / sessionJson.length)}%)")
+
+            // Use HTTP POST for large payloads (more reliable than socket.io for big data)
+            Log.d(TAG, "sendProfileData: Sending via HTTP POST...")
+            val success = sendProfileDataViaHttp(session.sessionId, compressedData)
+
+            if (success) {
+                Log.d(TAG, "sendProfileData: HTTP POST successful for sessionId=${session.sessionId}")
+            } else {
+                Log.e(TAG, "sendProfileData: HTTP POST failed, profile data may be lost")
+            }
+
+            // Small delay before sending idle status
+            kotlinx.coroutines.delay(200)
+            Log.d(TAG, "sendProfileData: Complete")
+        } catch (e: Exception) {
+            Log.e(TAG, "sendProfileData: ERROR - ${e.message}", e)
+        }
+    }
+
+    private fun sendProfileDataViaHttp(sessionId: String, compressedData: ByteArray): Boolean {
+        return try {
+            val url = java.net.URL("$backendUrl/api/profile/upload")
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/octet-stream")
+            connection.setRequestProperty("X-Device-Id", deviceId)
+            connection.setRequestProperty("X-Session-Id", sessionId)
+            connection.setRequestProperty("Content-Encoding", "gzip")
+            connection.connectTimeout = 30000
+            connection.readTimeout = 30000
+
+            connection.outputStream.use { os ->
+                os.write(compressedData)
+            }
+
+            val responseCode = connection.responseCode
+            Log.d(TAG, "sendProfileDataViaHttp: Response code: $responseCode")
+
+            if (responseCode == 200 || responseCode == 201) {
+                true
+            } else {
+                val errorStream = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+                Log.e(TAG, "sendProfileDataViaHttp: Error response: $errorStream")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "sendProfileDataViaHttp: Exception: ${e.message}", e)
+            false
+        }
+    }
+
+    private fun compressString(input: String): ByteArray {
+        val byteArrayOutputStream = java.io.ByteArrayOutputStream()
+        java.util.zip.GZIPOutputStream(byteArrayOutputStream).use { gzip ->
+            gzip.write(input.toByteArray(Charsets.UTF_8))
+        }
+        return byteArrayOutputStream.toByteArray()
     }
 
     private fun getDeviceId(): String {
